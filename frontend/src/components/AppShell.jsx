@@ -110,9 +110,20 @@ export default function AppShell({ user, onSignOut, onUserUpdated }) {
         }
       >
         <div className="sidebar-brand">
-          <span className="brand-mark">
-            <BookOpenCheck size={22} />
-          </span>
+          <img
+            src="/rathinam-logo.png"
+            alt="Rathinam College"
+            className="sidebar-college-logo"
+            style={{
+              height: '36px',
+              width: 'auto',
+              objectFit: 'contain',
+              background: '#ffffff',
+              padding: '2px 4px',
+              borderRadius: '6px',
+              boxShadow: '0 1px 3px rgba(0,0,0,0.1)'
+            }}
+          />
 
           <span>
             <b>R-PORTAL</b>

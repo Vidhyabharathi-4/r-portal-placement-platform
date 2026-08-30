@@ -77,12 +77,19 @@ export default function Auth({ onAuthenticated }) {
     <main className="auth-layout">
 
       <section className="auth-intro">
-        <div className="auth-brand">
-          <BookOpenCheck size={26} />
-          <b>R-PORTAL</b>
+        <div className="auth-brand-wrapper">
+          <img
+            src="/rathinam-logo.png"
+            alt="Rathinam College Logo"
+            className="auth-college-logo"
+          />
+          <div className="auth-brand-text">
+            <span className="auth-brand-title">R-PORTAL</span>
+            <span className="auth-brand-badge">Placement Operations</span>
+          </div>
         </div>
 
-        <p className="eyebrow">
+        <p className="eyebrow" style={{ marginTop: '20px' }}>
           COLLEGE PLACEMENT OPERATIONS
         </p>
 
@@ -98,6 +105,13 @@ export default function Auth({ onAuthenticated }) {
 
       <section className="auth-panel">
         <div className="auth-form">
+          <div className="auth-form-header">
+            <img
+              src="/rathinam-logo.png"
+              alt="Rathinam College Logo"
+              className="auth-card-logo"
+            />
+          </div>
 
           <p className="eyebrow">
             {isRegister
