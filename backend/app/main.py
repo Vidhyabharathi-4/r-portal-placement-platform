@@ -51,8 +51,8 @@ def seed_default_admin():
 seed_default_admin()
 app = FastAPI(title="R-PORTAL API", version="1.0.0")
 app.add_middleware(CORSMiddleware, allow_origins=get_settings().origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
-UPLOAD_DIR = Path("uploads")
-UPLOAD_DIR.mkdir(exist_ok=True)
+UPLOAD_DIR = Path("/tmp/uploads" if os.getenv("VERCEL") else "uploads")
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def audit_commit(db: Session):
