@@ -39,6 +39,7 @@ import {
   BellRing,
   Sliders,
   LogOut,
+  Sparkles,
   Settings as SettingsIcon,
   Info,
   UserCheck,
