@@ -3,7 +3,10 @@ from functools import lru_cache
 
 
 class Settings:
-    database_url: str = os.getenv("DATABASE_URL", "sqlite:///./r_portal.db")
+    database_url: str = os.getenv(
+        "DATABASE_URL",
+        "postgresql://neondb_owner:npg_fwU0HPlZV9yk@ep-still-mud-azhxci1d-pooler.c-3.ap-southeast-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require",
+    )
     secret_key: str = os.getenv("SECRET_KEY", "change-this-development-secret-before-production")
     access_token_expire_minutes: int = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "480"))
     cors_origins: str = os.getenv(

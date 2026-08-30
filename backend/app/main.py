@@ -7,7 +7,7 @@ from uuid import uuid4
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session, joinedload
 from .audit import log_action
 from .config import get_settings
@@ -776,28 +776,73 @@ def notification_count(db:Session=Depends(get_db),current:User=Depends(get_curre
 def mark_notification_read(notification_id:int,db:Session=Depends(get_db),current:User=Depends(get_current_user)):
     note=db.get(Notification,notification_id)
     if not note or note.recipient_id!=current.id:raise HTTPException(404,"Notification not found")
-    from datetime import datetime
-    note.is_read=True;note.read_at=datetime.utcnow();audit_commit(db);return note
+    from datetime import datetime, timezone
+    note.is_read=True;note.read_at=datetime.now(timezone.utc);audit_commit(db);return note
 
-@app.patch("/api/notifications/read-all",response_model=dict)
-def mark_all_notifications_read(db:Session=Depends(get_db),current:User=Depends(get_current_user)):
-    from datetime import datetime
-    db.execute(select(Notification).where(Notification.recipient_id==current.id,Notification.is_read.is_(False)))
-    db.query(Notification).filter(Notification.recipient_id==current.id,Notification.is_read==False).update({Notification.is_read:True,Notification.read_at:datetime.utcnow()})
+@app.patch("/api/notifications/read-all", response_model=dict)
+def mark_all_notifications_read(db: Session = Depends(get_db), current: User = Depends(get_current_user)):
+    from datetime import datetime, timezone
+    db.execute(
+        update(Notification)
+        .where(Notification.recipient_id == current.id, Notification.is_read.is_(False))
+        .values(is_read=True, read_at=datetime.now(timezone.utc))
+    )
+
     audit_commit(db)
-    return {"message":"All notifications marked as read"}
+    return {"message": "All notifications marked as read"}
 
-@app.get("/api/reports",response_model=ReportsOut)
-def reports(db:Session=Depends(get_db),current:User=Depends(get_current_user)):
-    total=db.scalar(select(func.count()).select_from(Student)) or 0
-    eligible=db.scalar(select(func.count()).select_from(Student).where(Student.is_eligible.is_(True))) or 0
-    placed=db.scalar(select(func.count()).select_from(Student).where(Student.placement_status==PlacementStatus.PLACED)) or 0
-    unplaced=db.scalar(select(func.count()).select_from(Student).where(Student.placement_status==PlacementStatus.SEEKING)) or 0
-    departments=[{"department":name,"placed":count} for name,count in db.execute(select(Student.department,func.count()).where(Student.placement_status==PlacementStatus.PLACED).group_by(Student.department)).all()]
-    funnel=[{"status":status.value,"count":count} for status,count in db.execute(select(Application.status,func.count()).group_by(Application.status)).all()]
-    cold=db.scalar(select(func.count()).select_from(Company).where(Company.recruiter_status==RecruiterStatus.COLD)) or 0
-    warm=db.scalar(select(func.count()).select_from(Company).where(Company.recruiter_status==RecruiterStatus.WARM)) or 0
-    return ReportsOut(total_students=total,eligible_students=eligible,placed_students=placed,unplaced_students=unplaced,placement_percentage=round(placed*100/total,2) if total else 0,applications=db.scalar(select(func.count()).select_from(Application)) or 0,offers=db.scalar(select(func.count()).select_from(Application).where(Application.status==ApplicationStatus.OFFERED)) or 0,active_drives=db.scalar(select(func.count()).select_from(PlacementDrive).where(PlacementDrive.status==DriveStatus.OPEN,PlacementDrive.is_archived.is_(False))) or 0,total_companies=db.scalar(select(func.count()).select_from(Company)) or 0,cold_recruiters=cold,warm_recruiters=warm,hot_recruiters=hot,department_placements=departments,application_funnel=funnel)
+@app.get("/api/reports", response_model=ReportsOut)
+def reports(db: Session = Depends(get_db), current: User = Depends(get_current_user)):
+    total = db.scalar(select(func.count()).select_from(Student)) or 0
+    eligible = db.scalar(select(func.count()).select_from(Student).where(Student.is_eligible.is_(True))) or 0
+    placed = db.scalar(select(func.count()).select_from(Student).where(Student.placement_status == PlacementStatus.PLACED)) or 0
+    unplaced = db.scalar(select(func.count()).select_from(Student).where(Student.placement_status == PlacementStatus.SEEKING)) or 0
+    departments = [{"department": name, "placed": count} for name, count in db.execute(select(Student.department, func.count()).where(Student.placement_status == PlacementStatus.PLACED).group_by(Student.department)).all()]
+    funnel = [{"status": status.value, "count": count} for status, count in db.execute(select(Application.status, func.count()).group_by(Application.status)).all()]
+    cold = db.scalar(select(func.count()).select_from(Company).where(Company.recruiter_status == RecruiterStatus.COLD)) or 0
+    warm = db.scalar(select(func.count()).select_from(Company).where(Company.recruiter_status == RecruiterStatus.WARM)) or 0
+    hot = db.scalar(select(func.count()).select_from(Company).where(Company.recruiter_status == RecruiterStatus.HOT)) or 0
+
+    companies = db.scalars(select(Company)).all()
+    recruiter_metrics = []
+    for company in companies:
+        total_drives = db.scalar(select(func.count()).select_from(PlacementDrive).where(PlacementDrive.company_id == company.id)) or 0
+        active_drives = db.scalar(select(func.count()).select_from(PlacementDrive).where(PlacementDrive.company_id == company.id, PlacementDrive.status == DriveStatus.OPEN, PlacementDrive.is_archived.is_(False))) or 0
+        total_apps = db.scalar(select(func.count()).select_from(Application).join(PlacementDrive).where(PlacementDrive.company_id == company.id)) or 0
+        selected_c = db.scalar(select(func.count()).select_from(Application).join(PlacementDrive).where(PlacementDrive.company_id == company.id, Application.status == ApplicationStatus.OFFERED)) or 0
+        rejected_c = db.scalar(select(func.count()).select_from(Application).join(PlacementDrive).where(PlacementDrive.company_id == company.id, Application.status == ApplicationStatus.REJECTED)) or 0
+        recruiter_metrics.append({
+            "company_id": company.id,
+            "company_name": company.name,
+            "contact_name": company.contact_name,
+            "contact_email": company.contact_email,
+            "status": company.recruiter_status,
+            "total_drives": total_drives,
+            "active_drives": active_drives,
+            "total_applications": total_apps,
+            "selected_count": selected_c,
+            "rejected_count": rejected_c,
+            "last_engagement": company.updated_at,
+        })
+
+    return ReportsOut(
+        total_students=total,
+        eligible_students=eligible,
+        placed_students=placed,
+        unplaced_students=unplaced,
+        placement_percentage=round(placed * 100 / total, 2) if total else 0.0,
+        total_companies=len(companies),
+        cold_recruiters=cold,
+        warm_recruiters=warm,
+        hot_recruiters=hot,
+        applications=db.scalar(select(func.count()).select_from(Application)) or 0,
+        offers=db.scalar(select(func.count()).select_from(Application).where(Application.status == ApplicationStatus.OFFERED)) or 0,
+        active_drives=db.scalar(select(func.count()).select_from(PlacementDrive).where(PlacementDrive.status == DriveStatus.OPEN, PlacementDrive.is_archived.is_(False))) or 0,
+        department_placements=departments,
+        application_funnel=funnel,
+        recruiter_metrics=recruiter_metrics,
+    )
+
 
 
 # Serve frontend static files
