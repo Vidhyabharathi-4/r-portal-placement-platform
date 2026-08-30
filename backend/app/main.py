@@ -797,5 +797,30 @@ def reports(db:Session=Depends(get_db),current:User=Depends(get_current_user)):
     funnel=[{"status":status.value,"count":count} for status,count in db.execute(select(Application.status,func.count()).group_by(Application.status)).all()]
     cold=db.scalar(select(func.count()).select_from(Company).where(Company.recruiter_status==RecruiterStatus.COLD)) or 0
     warm=db.scalar(select(func.count()).select_from(Company).where(Company.recruiter_status==RecruiterStatus.WARM)) or 0
-    hot=db.scalar(select(func.count()).select_from(Company).where(Company.recruiter_status==RecruiterStatus.HOT)) or 0
     return ReportsOut(total_students=total,eligible_students=eligible,placed_students=placed,unplaced_students=unplaced,placement_percentage=round(placed*100/total,2) if total else 0,applications=db.scalar(select(func.count()).select_from(Application)) or 0,offers=db.scalar(select(func.count()).select_from(Application).where(Application.status==ApplicationStatus.OFFERED)) or 0,active_drives=db.scalar(select(func.count()).select_from(PlacementDrive).where(PlacementDrive.status==DriveStatus.OPEN,PlacementDrive.is_archived.is_(False))) or 0,total_companies=db.scalar(select(func.count()).select_from(Company)) or 0,cold_recruiters=cold,warm_recruiters=warm,hot_recruiters=hot,department_placements=departments,application_funnel=funnel)
+
+
+# Serve frontend static files
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+
+frontend_dir = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "frontend", "dist"
+)
+
+if os.path.exists(frontend_dir):
+    assets_dir = os.path.join(frontend_dir, "assets")
+    if os.path.exists(assets_dir):
+        app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
+
+    @app.get("/{catchall:path}")
+    def serve_frontend(catchall: str):
+        if catchall.startswith("api/"):
+            raise HTTPException(status_code=404, detail="Not Found")
+        
+        file_path = os.path.join(frontend_dir, catchall)
+        if os.path.isfile(file_path):
+            return FileResponse(file_path)
+            
+        return FileResponse(os.path.join(frontend_dir, "index.html"))
+
