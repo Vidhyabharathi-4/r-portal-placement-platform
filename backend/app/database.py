@@ -26,6 +26,9 @@ def ensure_sqlite_schema() -> None:
         inspector = inspect(conn)
 
         for table, columns in {
+            "users": [
+                ("preferences", "JSON NOT NULL DEFAULT '{}'"),
+            ],
             "companies": [
                 ("recruiter_status", "VARCHAR(20) NOT NULL DEFAULT 'COLD'"),
             ],

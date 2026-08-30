@@ -6,12 +6,12 @@ from .database import Base
 class Role(str,enum.Enum): ADMIN="ADMIN"; MANAGER="MANAGER"; LEAD="LEAD"
 class DriveStatus(str,enum.Enum): DRAFT="DRAFT"; OPEN="OPEN"; CLOSED="CLOSED"
 class ApplicationStatus(str,enum.Enum): APPLIED="APPLIED"; SHORTLISTED="SHORTLISTED"; INTERVIEW="INTERVIEW"; OFFERED="OFFERED"; REJECTED="REJECTED"; WITHDRAWN="WITHDRAWN"
-class RecruiterStatus(str,enum.Enum): HOT="HOT"; WARM="WARM"; COLD="COLD"
+class RecruiterStatus(str,enum.Enum): HOT="HOT"; WARM="WARM"; COLD="COLD"; DRIVE_COMPLETED="DRIVE_COMPLETED"
 class PlacementStatus(str,enum.Enum): SEEKING="SEEKING"; PLACED="PLACED"; NOT_ELIGIBLE="NOT_ELIGIBLE"
 class Timestamped:
  created_at:Mapped[datetime]=mapped_column(DateTime(timezone=True),default=lambda: datetime.now(timezone.utc)); updated_at:Mapped[datetime]=mapped_column(DateTime(timezone=True),default=lambda: datetime.now(timezone.utc),onupdate=lambda: datetime.now(timezone.utc))
 class User(Timestamped,Base):
- __tablename__="users"; id:Mapped[int]=mapped_column(primary_key=True); full_name:Mapped[str]=mapped_column(String(120)); email:Mapped[str]=mapped_column(String(255),unique=True,index=True); password_hash:Mapped[str]=mapped_column(String(255)); role:Mapped[Role]=mapped_column(Enum(Role),default=Role.LEAD); is_active:Mapped[bool]=mapped_column(Boolean,default=True)
+ __tablename__="users"; id:Mapped[int]=mapped_column(primary_key=True); full_name:Mapped[str]=mapped_column(String(120)); email:Mapped[str]=mapped_column(String(255),unique=True,index=True); password_hash:Mapped[str]=mapped_column(String(255)); role:Mapped[Role]=mapped_column(Enum(Role),default=Role.LEAD); is_active:Mapped[bool]=mapped_column(Boolean,default=True); preferences:Mapped[dict]=mapped_column(JSON,default=dict)
  created_drives=relationship("PlacementDrive",back_populates="created_by"); team_profile=relationship("PlacementTeamMember",foreign_keys="[PlacementTeamMember.user_id]",back_populates="user",uselist=False); invited_memberships=relationship("PlacementTeamMember",foreign_keys="[PlacementTeamMember.invited_by_id]",back_populates="invited_by"); notifications=relationship("Notification",back_populates="recipient")
 class Company(Timestamped,Base):
  __tablename__="companies"; id:Mapped[int]=mapped_column(primary_key=True); name:Mapped[str]=mapped_column(String(160),unique=True,index=True); website:Mapped[str|None]=mapped_column(String(255)); industry:Mapped[str|None]=mapped_column(String(120)); contact_name:Mapped[str|None]=mapped_column(String(120)); contact_email:Mapped[str|None]=mapped_column(String(255)); recruiter_status:Mapped[RecruiterStatus]=mapped_column(Enum(RecruiterStatus),default=RecruiterStatus.COLD,index=True)

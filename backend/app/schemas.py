@@ -3,6 +3,45 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from .models import ApplicationStatus, DriveStatus, PlacementStatus, RecruiterStatus, Role
 
 
+class NotificationPreferences(BaseModel):
+    application_updates: bool = True
+    drive_updates: bool = True
+    recruiter_updates: bool = True
+    student_updates: bool = True
+    system_updates: bool = True
+
+
+class UserPreferences(BaseModel):
+    theme: str = "system"
+    table_density: str = "comfortable"
+    default_page: str = "/dashboard"
+    default_export_format: str = "CSV"
+    default_print_orientation: str = "portrait"
+    notifications: NotificationPreferences = Field(default_factory=NotificationPreferences)
+
+
+class ProfileUpdate(BaseModel):
+    full_name: str = Field(min_length=2, max_length=120)
+
+
+class PasswordChange(BaseModel):
+    current_password: str = Field(min_length=8, max_length=128)
+    new_password: str = Field(min_length=8, max_length=128)
+
+
+class SettingsUpdate(BaseModel):
+    theme: str | None = None
+    table_density: str | None = None
+    default_page: str | None = None
+    default_export_format: str | None = None
+    default_print_orientation: str | None = None
+    notifications: dict | None = None
+
+
+class UserStatusUpdate(BaseModel):
+    is_active: bool
+
+
 class UserCreate(BaseModel):
     full_name: str = Field(min_length=2, max_length=120)
     email: str = Field(pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -18,6 +57,7 @@ class UserOut(BaseModel):
     role: Role
     is_active: bool
     created_at: datetime
+    preferences: dict | None = Field(default_factory=dict)
 
 
 class LoginRequest(BaseModel):
@@ -230,9 +270,12 @@ class ReportsOut(BaseModel):
     cold_recruiters: int
     warm_recruiters: int
     hot_recruiters: int
+    drive_completed_recruiters: int = 0
     applications: int
     offers: int
     active_drives: int
-    department_placements: list[dict]
-    application_funnel: list[dict]
+    department_placements: list[dict] = []
+    application_funnel: list[dict] = []
     recruiter_metrics: list[RecruiterMetricsOut] = []
+    records: list[dict] = []
+

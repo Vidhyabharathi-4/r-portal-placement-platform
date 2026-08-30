@@ -9,6 +9,7 @@ import {
   LogOut,
   Menu,
   ScrollText,
+  Settings as SettingsIcon,
   UsersRound,
   UserRoundCog,
   X,
@@ -28,6 +29,7 @@ const navigation = [
   ["/reports", FileBarChart2, "Reports"],
   ["/audit", ScrollText, "Audit Log"],
   ["/notifications", Bell, "Notifications"],
+  ["/settings", SettingsIcon, "Settings"],
 ];
 
 const titles = {
@@ -67,9 +69,13 @@ const titles = {
     "Notifications",
     "Operational updates requiring attention",
   ],
+  "/settings": [
+    "Settings",
+    "Manage profile, security, appearance, notifications, and application preferences",
+  ],
 };
 
-export default function AppShell({ user, onSignOut }) {
+export default function AppShell({ user, onSignOut, onUserUpdated }) {
   const [open, setOpen] = useState(false);
   const [unread, setUnread] = useState(0);
 
@@ -135,7 +141,7 @@ export default function AppShell({ user, onSignOut }) {
           ))}
         </nav>
 
-        <div className="sidebar-user">
+        <NavLink to="/settings" className="sidebar-user" title="Open Settings">
           <div className="avatar">
             {user?.full_name
               ?.slice(0, 1)
@@ -146,7 +152,7 @@ export default function AppShell({ user, onSignOut }) {
             <b>{user?.full_name || "User"}</b>
             <small>{user?.role || "User"}</small>
           </div>
-        </div>
+        </NavLink>
 
         <button
           className="signout"
@@ -189,21 +195,23 @@ export default function AppShell({ user, onSignOut }) {
               )}
             </NavLink>
 
-            <div className="avatar">
-              {user?.full_name
-                ?.slice(0, 1)
-                .toUpperCase()}
-            </div>
+            <NavLink to="/settings" className="topbar-user-link" title="Open Settings" style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
+              <div className="avatar">
+                {user?.full_name
+                  ?.slice(0, 1)
+                  .toUpperCase()}
+              </div>
 
-            <span>
-              {user?.full_name || "User"}
-            </span>
+              <span>
+                {user?.full_name || "User"}
+              </span>
+            </NavLink>
           </div>
         </header>
 
         {/* PAGE CONTENT */}
         <main className="content">
-          <Outlet context={{ user }} />
+          <Outlet context={{ user, onSignOut, onUserUpdated }} />
         </main>
       </div>
     </div>

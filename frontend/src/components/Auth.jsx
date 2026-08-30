@@ -203,6 +203,75 @@ export default function Auth({ onAuthenticated }) {
 
           </form>
 
+          {!isRegister && (
+            <div style={{ marginTop: '20px', paddingTop: '16px', borderTop: '1px solid #e2e8f0' }}>
+              <p style={{ fontSize: '12px', fontWeight: 600, color: '#64748b', textTransform: 'uppercase', marginBottom: '8px', letterSpacing: '0.05em' }}>
+                Quick Login Credentials:
+              </p>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                <button
+                  type="button"
+                  onClick={() => setForm({ ...form, email: 'sivasubramaniyam@gmail.com', password: 'SS@Rathinam' })}
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    padding: '8px 12px',
+                    borderRadius: '6px',
+                    border: '1px solid #e2e8f0',
+                    background: '#f8fafc',
+                    fontSize: '12.5px',
+                    textAlign: 'left',
+                    cursor: 'pointer',
+                  }}
+                >
+                  <span><strong>Admin:</strong> sivasubramaniyam@gmail.com</span>
+                  <span style={{ fontSize: '11px', color: '#2563eb', fontWeight: 600 }}>Fill Login</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setForm({ ...form, email: 'jeyakkanan@gmail.com', password: 'Jk@Rathinam' })}
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    padding: '8px 12px',
+                    borderRadius: '6px',
+                    border: '1px solid #e2e8f0',
+                    background: '#f8fafc',
+                    fontSize: '12.5px',
+                    textAlign: 'left',
+                    cursor: 'pointer',
+                  }}
+                >
+                  <span><strong>Manager:</strong> jeyakkanan@gmail.com</span>
+                  <span style={{ fontSize: '11px', color: '#2563eb', fontWeight: 600 }}>Fill Login</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setForm({ ...form, email: 'swetha@gmail.com', password: 'Swetha@Rathinam' })}
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    padding: '8px 12px',
+                    borderRadius: '6px',
+                    border: '1px solid #e2e8f0',
+                    background: '#f8fafc',
+                    fontSize: '12.5px',
+                    textAlign: 'left',
+                    cursor: 'pointer',
+                  }}
+                >
+                  <span><strong>Lead:</strong> swetha@gmail.com</span>
+                  <span style={{ fontSize: '11px', color: '#2563eb', fontWeight: 600 }}>Fill Login</span>
+                </button>
+              </div>
+            </div>
+          )}
+
           <p className="auth-switch">
             {isRegister
               ? 'Already have an account?'
