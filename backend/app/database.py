@@ -37,6 +37,11 @@ def ensure_sqlite_schema() -> None:
             ],
             "companies": [
                 ("recruiter_status", "VARCHAR(20) NOT NULL DEFAULT 'COLD'"),
+                ("contact_phone", "VARCHAR(30)"),
+                ("contact_designation", "VARCHAR(120) DEFAULT 'HR Manager'"),
+                ("logo_url", "VARCHAR(500)"),
+                ("notes", "TEXT"),
+                ("last_contacted_at", "TIMESTAMP WITH TIME ZONE" if is_postgres else "DATETIME"),
             ],
             "placement_drives": [
                 ("description", "TEXT"),

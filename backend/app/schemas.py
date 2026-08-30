@@ -71,12 +71,21 @@ class Token(BaseModel):
     user: UserOut
 
 
+class CompanyStatusUpdate(BaseModel):
+    status: RecruiterStatus
+
+
 class CompanyBase(BaseModel):
     name: str = Field(min_length=2, max_length=160)
     website: str | None = Field(default=None, max_length=255)
     industry: str | None = Field(default=None, max_length=120)
     contact_name: str | None = Field(default=None, max_length=120)
     contact_email: str | None = Field(default=None, pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+    contact_phone: str | None = Field(default=None, max_length=30)
+    contact_designation: str | None = Field(default=None, max_length=120)
+    logo_url: str | None = Field(default=None, max_length=500)
+    notes: str | None = None
+    last_contacted_at: datetime | None = None
     recruiter_status: RecruiterStatus = RecruiterStatus.COLD
 
 
@@ -86,12 +95,78 @@ class CompanyOut(CompanyBase):
     created_at: datetime
     updated_at: datetime
 
+
+class RecruiterContactBase(BaseModel):
+    company_id: int
+    name: str = Field(min_length=2, max_length=140)
+    designation: str | None = Field(default="HR Manager", max_length=120)
+    email: str = Field(pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+    phone: str | None = Field(default=None, max_length=30)
+    alternate_phone: str | None = Field(default=None, max_length=30)
+    department: str | None = Field(default=None, max_length=120)
+    linkedin_url: str | None = Field(default=None, max_length=255)
+    status: str = Field(default="ACTIVE", max_length=30)
+    last_contacted: datetime | None = None
+    notes: str | None = None
+
+
+class RecruiterContactCreate(RecruiterContactBase):
+    pass
+
+
+class RecruiterContactUpdate(BaseModel):
+    company_id: int | None = None
+    name: str | None = Field(default=None, min_length=2, max_length=140)
+    designation: str | None = Field(default=None, max_length=120)
+    email: str | None = Field(default=None, pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+    phone: str | None = Field(default=None, max_length=30)
+    alternate_phone: str | None = Field(default=None, max_length=30)
+    department: str | None = Field(default=None, max_length=120)
+    linkedin_url: str | None = Field(default=None, max_length=255)
+    status: str | None = Field(default=None, max_length=30)
+    last_contacted: datetime | None = None
+    notes: str | None = None
+
+
+class RecruiterContactOut(RecruiterContactBase):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    created_at: datetime
+    updated_at: datetime
+    company: CompanyOut | None = None
+    total_drives: int = 0
+
+
+class CompanyCardOut(CompanyOut):
+    recruiter_count: int = 0
+    primary_contact: str | None = None
+    primary_email: str | None = None
+    primary_phone: str | None = None
+    primary_designation: str | None = None
+    total_drives: int = 0
+    latest_drive_title: str | None = None
+    latest_drive_date: datetime | None = None
+    latest_drive_status: str | None = None
+    applicants_count: int = 0
+    shortlisted_count: int = 0
+    selected_count: int = 0
+
+
 class CompanyDetailsOut(CompanyOut):
     total_drives: int = 0
     active_drives: int = 0
     total_applications: int = 0
     selected_students: int = 0
     last_engagement: datetime | None = None
+    recruiters: list[RecruiterContactOut] = Field(default_factory=list)
+    drives: list[dict] = Field(default_factory=list)
+
+
+class RecruitersOverviewOut(BaseModel):
+    summary: dict
+    engagement_distribution: dict
+    companies: list[CompanyCardOut]
+    recruiters: list[dict]
 
 
 class DriveBase(BaseModel):

@@ -2,6 +2,7 @@ import io
 import os
 import re
 import shutil
+from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 from fastapi import Depends, FastAPI, File, HTTPException, Query, Response, UploadFile, status
@@ -13,8 +14,8 @@ from .audit import log_action
 from .config import get_settings
 from .database import Base, SessionLocal, ensure_sqlite_schema, engine, get_db
 from .dependencies import get_current_user, require_roles
-from .models import Application, ApplicationStatus, AuditLog, Company, DriveStatus, Notification, PlacementDrive, PlacementStatus, PlacementTeamDriveAssignment, PlacementTeamMember, RecruiterStatus, Role, Student, User
-from .schemas import ApplicationCreate, ApplicationOut, ApplicationStatusUpdate, AuditOut, CompanyBase, CompanyDetailsOut, CompanyOut, DashboardOut, DriveCreate, DriveOut, DriveUpdate, LoginRequest, NotificationOut, PasswordChange, ProfileUpdate, RecruiterMetricsOut, ReportsOut, SettingsUpdate, StudentCreate, StudentOut, TeamMemberCreate, TeamMemberOut, TeamMemberUpdate, Token, UserCreate, UserOut, UserStatusUpdate
+from .models import Application, ApplicationStatus, AuditLog, Company, DriveStatus, Notification, PlacementDrive, PlacementStatus, PlacementTeamDriveAssignment, PlacementTeamMember, RecruiterContact, RecruiterStatus, Role, Student, User
+from .schemas import ApplicationCreate, ApplicationOut, ApplicationStatusUpdate, AuditOut, CompanyBase, CompanyCardOut, CompanyDetailsOut, CompanyOut, CompanyStatusUpdate, DashboardOut, DriveCreate, DriveOut, DriveUpdate, LoginRequest, NotificationOut, PasswordChange, ProfileUpdate, RecruiterContactBase, RecruiterContactCreate, RecruiterContactOut, RecruiterContactUpdate, RecruiterMetricsOut, RecruitersOverviewOut, ReportsOut, SettingsUpdate, StudentCreate, StudentOut, TeamMemberCreate, TeamMemberOut, TeamMemberUpdate, Token, UserCreate, UserOut, UserStatusUpdate
 from .security import create_access_token, hash_password, verify_password
 
 try:
@@ -72,10 +73,36 @@ def seed_default_users():
                     preferences={},
                 )
                 db.add(u)
+            else:
+                existing.password_hash = hash_password(acc["password"])
+                existing.role = acc["role"]
+                existing.is_active = True
+        db.commit()
+
+
+def seed_default_recruiter_contacts():
+    with SessionLocal() as db:
+        companies = db.scalars(select(Company)).all()
+        for comp in companies:
+            existing_count = db.scalar(select(func.count()).select_from(RecruiterContact).where(RecruiterContact.company_id == comp.id)) or 0
+            if existing_count == 0 and comp.contact_name:
+                recruiter = RecruiterContact(
+                    company_id=comp.id,
+                    name=comp.contact_name,
+                    designation=comp.contact_designation or "Head of Campus Recruitment",
+                    email=comp.contact_email or f"campus@{comp.name.lower().replace(' ', '')}.com",
+                    phone=comp.contact_phone or "+91 98765 43210",
+                    department="University Relations / Talent Acquisition",
+                    status="ACTIVE",
+                    last_contacted=comp.last_contacted_at or comp.updated_at,
+                    notes=f"Primary campus recruitment coordinator for {comp.name}."
+                )
+                db.add(recruiter)
         db.commit()
 
 
 seed_default_users()
+seed_default_recruiter_contacts()
 app = FastAPI(title="R-PORTAL API", version="1.0.0")
 app.add_middleware(CORSMiddleware, allow_origins=get_settings().origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 UPLOAD_DIR = Path("/tmp/uploads" if os.getenv("VERCEL") else "uploads")
@@ -882,14 +909,174 @@ def delete_student(student_id:int,db:Session=Depends(get_db),current:User=Depend
     db.delete(student);audit_commit(db)
 
 
-@app.get("/api/recruiters/active",response_model=list[CompanyOut])
-def active_recruiters(db:Session=Depends(get_db),current:User=Depends(get_current_user)):
-    return db.scalars(select(Company).where(Company.recruiter_status.in_([RecruiterStatus.HOT, RecruiterStatus.WARM, RecruiterStatus.DRIVE_COMPLETED])).order_by(Company.recruiter_status,Company.name)).all()
+@app.get("/api/recruiters/overview", response_model=RecruitersOverviewOut)
+def recruiters_overview(
+    status: str | None = None,
+    recruiter_status: str | None = None,
+    company_id: int | None = None,
+    search: str | None = None,
+    db: Session = Depends(get_db),
+    current: User = Depends(get_current_user)
+):
+    companies = db.scalars(select(Company).options(joinedload(Company.drives), joinedload(Company.recruiters)).order_by(Company.name)).unique().all()
+    all_recruiters = db.scalars(select(RecruiterContact).options(joinedload(RecruiterContact.company)).order_by(RecruiterContact.name)).unique().all()
+    all_drives = db.scalars(select(PlacementDrive).where(PlacementDrive.is_archived.is_(False))).all()
+    
+    total_recruiters = len(all_recruiters)
+    active_recruiters_count = len([r for r in all_recruiters if r.status == "ACTIVE"])
+    connected_companies_count = len(companies)
+    total_drives_count = len(all_drives)
+    active_drives_count = len([d for d in all_drives if d.status == DriveStatus.OPEN])
+    completed_drives_count = len([d for d in all_drives if d.status == DriveStatus.CLOSED])
+
+    cold_count = len([c for c in companies if c.recruiter_status == RecruiterStatus.COLD])
+    warm_count = len([c for c in companies if c.recruiter_status == RecruiterStatus.WARM])
+    hot_count = len([c for c in companies if c.recruiter_status == RecruiterStatus.HOT])
+    drive_completed_count = len([c for c in companies if c.recruiter_status == RecruiterStatus.DRIVE_COMPLETED])
+
+    company_cards = []
+    for c in companies:
+        c_drives = [d for d in all_drives if d.company_id == c.id]
+        c_drive_ids = [d.id for d in c_drives]
+        c_recruiters = [r for r in all_recruiters if r.company_id == c.id]
+        
+        apps_count = db.scalar(select(func.count()).select_from(Application).where(Application.drive_id.in_(c_drive_ids))) if c_drive_ids else 0
+        shortlisted_count = db.scalar(select(func.count()).select_from(Application).where(Application.drive_id.in_(c_drive_ids), Application.status.in_([ApplicationStatus.SHORTLISTED, ApplicationStatus.INTERVIEW, ApplicationStatus.OFFERED]))) if c_drive_ids else 0
+        selected_count = db.scalar(select(func.count()).select_from(Application).where(Application.drive_id.in_(c_drive_ids), Application.status == ApplicationStatus.OFFERED)) if c_drive_ids else 0
+        
+        primary_recruiter = c_recruiters[0] if c_recruiters else None
+        latest_drive = sorted(c_drives, key=lambda d: d.created_at, reverse=True)[0] if c_drives else None
+
+        company_cards.append(CompanyCardOut(
+            id=c.id,
+            name=c.name,
+            website=c.website,
+            industry=c.industry,
+            contact_name=c.contact_name or (primary_recruiter.name if primary_recruiter else None),
+            contact_email=c.contact_email or (primary_recruiter.email if primary_recruiter else None),
+            contact_phone=c.contact_phone or (primary_recruiter.phone if primary_recruiter else None),
+            contact_designation=c.contact_designation or (primary_recruiter.designation if primary_recruiter else "HR Manager"),
+            logo_url=c.logo_url,
+            notes=c.notes,
+            last_contacted_at=c.last_contacted_at or (latest_drive.created_at if latest_drive else c.updated_at),
+            recruiter_status=c.recruiter_status,
+            created_at=c.created_at,
+            updated_at=c.updated_at,
+            recruiter_count=len(c_recruiters),
+            primary_contact=primary_recruiter.name if primary_recruiter else c.contact_name,
+            primary_email=primary_recruiter.email if primary_recruiter else c.contact_email,
+            primary_phone=primary_recruiter.phone if primary_recruiter else c.contact_phone,
+            primary_designation=primary_recruiter.designation if primary_recruiter else c.contact_designation,
+            total_drives=len(c_drives),
+            latest_drive_title=latest_drive.title if latest_drive else None,
+            latest_drive_date=latest_drive.drive_date if latest_drive else None,
+            latest_drive_status=latest_drive.status.value if latest_drive else None,
+            applicants_count=apps_count or 0,
+            shortlisted_count=shortlisted_count or 0,
+            selected_count=selected_count or 0,
+        ))
+
+    recruiter_list = []
+    for r in all_recruiters:
+        r_comp = r.company
+        c_drives = [d for d in all_drives if r_comp and d.company_id == r_comp.id]
+        recruiter_list.append({
+            "id": r.id,
+            "company_id": r.company_id,
+            "company_name": r_comp.name if r_comp else "—",
+            "company_status": r_comp.recruiter_status.value if r_comp else "COLD",
+            "company_industry": r_comp.industry if r_comp else "—",
+            "company_logo": r_comp.logo_url if r_comp else None,
+            "name": r.name,
+            "designation": r.designation or "HR Manager",
+            "email": r.email,
+            "phone": r.phone or "—",
+            "alternate_phone": r.alternate_phone or "—",
+            "department": r.department or "Talent Acquisition",
+            "linkedin_url": r.linkedin_url,
+            "status": r.status,
+            "last_contacted": r.last_contacted.isoformat() if r.last_contacted else None,
+            "notes": r.notes,
+            "total_drives": len(c_drives),
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+        })
+
+    return RecruitersOverviewOut(
+        summary={
+            "total_recruiters": total_recruiters,
+            "active_recruiters": active_recruiters_count,
+            "connected_companies": connected_companies_count,
+            "placement_drives": total_drives_count,
+            "active_drives": active_drives_count,
+            "completed_drives": completed_drives_count,
+        },
+        engagement_distribution={
+            "cold": cold_count,
+            "warm": warm_count,
+            "hot": hot_count,
+            "drive_completed": drive_completed_count,
+        },
+        companies=company_cards,
+        recruiters=recruiter_list,
+    )
 
 
-@app.get("/api/recruiters",response_model=list[CompanyOut])
-def list_recruiters(status:str|None=None,search:str|None=None,db:Session=Depends(get_db),current:User=Depends(get_current_user)):
-    query=select(Company)
+@app.get("/api/recruiters/active", response_model=list[CompanyOut])
+def active_recruiters(db: Session = Depends(get_db), current: User = Depends(get_current_user)):
+    return db.scalars(select(Company).where(Company.recruiter_status.in_([RecruiterStatus.HOT, RecruiterStatus.WARM, RecruiterStatus.DRIVE_COMPLETED])).order_by(Company.recruiter_status, Company.name)).all()
+
+
+@app.get("/api/recruiters/contacts", response_model=list[dict])
+def list_recruiter_contacts(
+    status: str | None = None,
+    company_id: int | None = None,
+    search: str | None = None,
+    db: Session = Depends(get_db),
+    current: User = Depends(get_current_user)
+):
+    query = select(RecruiterContact).options(joinedload(RecruiterContact.company)).order_by(RecruiterContact.name)
+    if status and status != "ALL":
+        query = query.where(RecruiterContact.status == status)
+    if company_id:
+        query = query.where(RecruiterContact.company_id == company_id)
+    if search:
+        query = query.join(Company).where(
+            (RecruiterContact.name.ilike(f"%{search}%"))
+            | (RecruiterContact.email.ilike(f"%{search}%"))
+            | (RecruiterContact.phone.ilike(f"%{search}%"))
+            | (RecruiterContact.designation.ilike(f"%{search}%"))
+            | (Company.name.ilike(f"%{search}%"))
+        )
+    contacts = db.scalars(query).unique().all()
+    results = []
+    for r in contacts:
+        drives_count = db.scalar(select(func.count()).select_from(PlacementDrive).where(PlacementDrive.company_id == r.company_id)) or 0
+        results.append({
+            "id": r.id,
+            "company_id": r.company_id,
+            "company_name": r.company.name if r.company else "—",
+            "company_status": r.company.recruiter_status.value if r.company else "COLD",
+            "company_industry": r.company.industry if r.company else "—",
+            "company_logo": r.company.logo_url if r.company else None,
+            "name": r.name,
+            "designation": r.designation or "HR Manager",
+            "email": r.email,
+            "phone": r.phone or "—",
+            "alternate_phone": r.alternate_phone or "—",
+            "department": r.department or "Talent Acquisition",
+            "linkedin_url": r.linkedin_url,
+            "status": r.status,
+            "last_contacted": r.last_contacted.isoformat() if r.last_contacted else None,
+            "notes": r.notes,
+            "total_drives": drives_count,
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+        })
+    return results
+
+
+@app.get("/api/recruiters", response_model=list[CompanyOut])
+def list_recruiters(status: str | None = None, search: str | None = None, db: Session = Depends(get_db), current: User = Depends(get_current_user)):
+    query = select(Company)
     if status == "ACTIVE":
         query = query.where(Company.recruiter_status.in_([RecruiterStatus.HOT, RecruiterStatus.WARM, RecruiterStatus.DRIVE_COMPLETED]))
     elif status and status != "ALL":
@@ -899,8 +1086,46 @@ def list_recruiters(status:str|None=None,search:str|None=None,db:Session=Depends
         except ValueError:
             pass
     if search:
-        query=query.where((Company.name.ilike(f"%{search}%"))|(Company.contact_name.ilike(f"%{search}%"))|(Company.contact_email.ilike(f"%{search}%"))|(Company.industry.ilike(f"%{search}%")))
-    return db.scalars(query.order_by(Company.recruiter_status,Company.name)).all()
+        query = query.where((Company.name.ilike(f"%{search}%")) | (Company.contact_name.ilike(f"%{search}%")) | (Company.contact_email.ilike(f"%{search}%")) | (Company.industry.ilike(f"%{search}%")))
+    return db.scalars(query.order_by(Company.recruiter_status, Company.name)).all()
+
+
+@app.get("/api/recruiters/sample-template")
+def download_recruiter_template(format: str = Query("xlsx", pattern="^(xlsx|csv)$")):
+    headers = ["Name", "Company", "Designation", "Email", "Phone", "Status", "Last Contacted", "Notes"]
+    sample_rows = [
+        ["Priya Sharma", "Tata Consultancy Services", "Campus HR Lead", "priya.sharma@tcs.com", "+91 9876543210", "ACTIVE", "2026-08-25", "Primary contact for Digital hiring."],
+        ["Karthik Raja", "Zoho Corporation", "Lead Talent Partner", "campus@zohocorp.com", "+91 9876543211", "ACTIVE", "2026-08-28", "Coordinating SDE product drive."],
+        ["Rohan Deshmukh", "Amazon Web Services", "University Relations Specialist", "aws-campus@amazon.com", "+91 9876543212", "ACTIVE", "2026-08-30", "Cloud support associate hiring."],
+    ]
+    if format == "csv":
+        output = io.StringIO()
+        import csv
+        writer = csv.writer(output)
+        writer.writerow(headers)
+        for row in sample_rows:
+            writer.writerow(row)
+        csv_bytes = output.getvalue().encode("utf-8-sig")
+        return Response(
+            content=csv_bytes,
+            media_type="text/csv",
+            headers={"Content-Disposition": 'attachment; filename="recruiters_sample_template.csv"'}
+        )
+    else:
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Recruiters"
+        ws.append(headers)
+        for row in sample_rows:
+            ws.append(row)
+        buf = io.BytesIO()
+        wb.save(buf)
+        buf.seek(0)
+        return Response(
+            content=buf.read(),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": 'attachment; filename="recruiters_sample_template.xlsx"'}
+        )
 
 
 @app.get("/api/recruiters/{recruiter_id}", response_model=CompanyDetailsOut)
@@ -914,6 +1139,8 @@ def get_recruiter_details(recruiter_id: int, db: Session = Depends(get_db), curr
     selected_students = db.scalar(select(func.count()).select_from(Application).where(Application.drive_id.in_(drive_ids), Application.status == ApplicationStatus.OFFERED)) if drive_ids else 0
     active_drives = len([d for d in drives if d.status == DriveStatus.OPEN and not d.is_archived])
     last_drive = max([d.created_at for d in drives], default=None) if drives else company.updated_at
+    recruiters = db.scalars(select(RecruiterContact).where(RecruiterContact.company_id == recruiter_id)).all()
+    
     return CompanyDetailsOut(
         id=company.id,
         name=company.name,
@@ -921,6 +1148,11 @@ def get_recruiter_details(recruiter_id: int, db: Session = Depends(get_db), curr
         industry=company.industry,
         contact_name=company.contact_name,
         contact_email=company.contact_email,
+        contact_phone=company.contact_phone,
+        contact_designation=company.contact_designation,
+        logo_url=company.logo_url,
+        notes=company.notes,
+        last_contacted_at=company.last_contacted_at,
         recruiter_status=company.recruiter_status,
         created_at=company.created_at,
         updated_at=company.updated_at,
@@ -929,38 +1161,330 @@ def get_recruiter_details(recruiter_id: int, db: Session = Depends(get_db), curr
         total_applications=total_applications or 0,
         selected_students=selected_students or 0,
         last_engagement=last_drive,
+        recruiters=[RecruiterContactOut.model_validate(r) for r in recruiters],
+        drives=[{
+            "id": d.id,
+            "title": d.title,
+            "location": d.location,
+            "package_lpa": d.package_lpa,
+            "status": d.status.value,
+            "drive_date": d.drive_date.isoformat() if d.drive_date else None,
+            "created_at": d.created_at.isoformat() if d.created_at else None,
+        } for d in drives]
     )
 
 
-@app.post("/api/recruiters",response_model=CompanyOut,status_code=201)
-def create_recruiter(payload:CompanyBase,db:Session=Depends(get_db),current:User=Depends(require_roles(Role.ADMIN))):
-    if db.scalar(select(Company).where(Company.name==payload.name)):
-        raise HTTPException(409,"A recruiter with this name already exists")
-    company=Company(**payload.model_dump());db.add(company);db.flush()
-    log_action(db,current,"CREATE","recruiter",company.id,{"name":company.name,"status":company.recruiter_status.value})
+@app.get("/api/companies/{company_id}/details", response_model=CompanyDetailsOut)
+def get_company_full_details(company_id: int, db: Session = Depends(get_db), current: User = Depends(get_current_user)):
+    return get_recruiter_details(recruiter_id=company_id, db=db, current=current)
+
+
+@app.patch("/api/companies/{company_id}/status", response_model=CompanyOut)
+def update_company_status(company_id: int, payload: CompanyStatusUpdate, db: Session = Depends(get_db), current: User = Depends(require_roles(Role.ADMIN, Role.MANAGER))):
+    company = db.get(Company, company_id)
+    if not company:
+        raise HTTPException(404, "Company not found")
+    old_status = company.recruiter_status.value
+    company.recruiter_status = payload.status
+    company.last_contacted_at = datetime.now(timezone.utc)
+    
+    log_action(db, current, "COMPANY_STATUS_CHANGED", "company", company.id, {"company": company.name, "from": old_status, "to": payload.status.value})
+    notify_admins_and_managers(
+        db,
+        "Company Engagement Status Updated",
+        f"{company.name} status updated to {payload.status.value} by {current.full_name}.",
+        "RECRUITER_STATUS_CHANGED",
+        "company",
+        company.id,
+        exclude_user_id=current.id
+    )
+    audit_commit(db)
+    db.refresh(company)
+    return company
+
+
+@app.post("/api/recruiters/contacts", response_model=dict, status_code=201)
+def create_recruiter_contact(
+    payload: RecruiterContactCreate,
+    db: Session = Depends(get_db),
+    current: User = Depends(require_roles(Role.ADMIN, Role.MANAGER))
+):
+    company = db.get(Company, payload.company_id)
+    if not company:
+        raise HTTPException(404, "Target company does not exist")
+    
+    existing = db.scalar(select(RecruiterContact).where(RecruiterContact.company_id == payload.company_id, RecruiterContact.email == payload.email))
+    if existing:
+        raise HTTPException(409, f"Recruiter contact with email '{payload.email}' already exists for {company.name}")
+    
+    recruiter = RecruiterContact(**payload.model_dump())
+    if not recruiter.last_contacted:
+        recruiter.last_contacted = datetime.now(timezone.utc)
+    db.add(recruiter)
+    db.flush()
+
+    if not company.contact_name or not company.contact_email:
+        company.contact_name = recruiter.name
+        company.contact_email = recruiter.email
+        company.contact_phone = recruiter.phone
+        company.contact_designation = recruiter.designation
+
+    log_action(db, current, "CREATE", "recruiter_contact", recruiter.id, {"name": recruiter.name, "company": company.name})
+    notify_admins_and_managers(
+        db,
+        "New Recruiter Added",
+        f"Recruiter {recruiter.name} ({recruiter.designation or 'HR'}) from {company.name} added.",
+        "RECRUITER_CREATED",
+        "recruiter_contact",
+        recruiter.id,
+        exclude_user_id=current.id
+    )
+    audit_commit(db)
+    db.refresh(recruiter)
+    return {
+        "id": recruiter.id,
+        "name": recruiter.name,
+        "company_id": company.id,
+        "company_name": company.name,
+        "email": recruiter.email,
+        "designation": recruiter.designation,
+        "status": recruiter.status,
+        "message": f"Recruiter {recruiter.name} added successfully."
+    }
+
+
+@app.put("/api/recruiters/contacts/{contact_id}", response_model=dict)
+@app.patch("/api/recruiters/contacts/{contact_id}", response_model=dict)
+def update_recruiter_contact(
+    contact_id: int,
+    payload: RecruiterContactUpdate,
+    db: Session = Depends(get_db),
+    current: User = Depends(require_roles(Role.ADMIN, Role.MANAGER))
+):
+    recruiter = db.get(RecruiterContact, contact_id)
+    if not recruiter:
+        raise HTTPException(404, "Recruiter contact not found")
+    
+    for key, value in payload.model_dump(exclude_unset=True).items():
+        setattr(recruiter, key, value)
+    
+    log_action(db, current, "UPDATE", "recruiter_contact", recruiter.id, {"name": recruiter.name, "email": recruiter.email})
+    audit_commit(db)
+    db.refresh(recruiter)
+    return {
+        "id": recruiter.id,
+        "name": recruiter.name,
+        "email": recruiter.email,
+        "status": recruiter.status,
+        "message": "Recruiter details updated successfully."
+    }
+
+
+@app.delete("/api/recruiters/contacts/{contact_id}", status_code=204)
+def delete_recruiter_contact(
+    contact_id: int,
+    db: Session = Depends(get_db),
+    current: User = Depends(require_roles(Role.ADMIN, Role.MANAGER))
+):
+    recruiter = db.get(RecruiterContact, contact_id)
+    if not recruiter:
+        raise HTTPException(404, "Recruiter contact not found")
+    
+    company_name = recruiter.company.name if recruiter.company else "Company"
+    log_action(db, current, "DELETE", "recruiter_contact", recruiter.id, {"name": recruiter.name, "company": company_name})
+    notify_admins_and_managers(
+        db,
+        "Recruiter Contact Deleted",
+        f"Recruiter {recruiter.name} ({company_name}) was deleted by {current.full_name}.",
+        "RECRUITER_DELETED",
+        "recruiter_contact",
+        recruiter.id,
+        exclude_user_id=current.id
+    )
+    db.delete(recruiter)
+    audit_commit(db)
+
+
+@app.post("/api/recruiters", response_model=CompanyOut, status_code=201)
+def create_recruiter(payload: CompanyBase, db: Session = Depends(get_db), current: User = Depends(require_roles(Role.ADMIN))):
+    if db.scalar(select(Company).where(Company.name == payload.name)):
+        raise HTTPException(409, "A recruiter/company with this name already exists")
+    company = Company(**payload.model_dump())
+    db.add(company)
+    db.flush()
+
+    if company.contact_name and company.contact_email:
+        recruiter = RecruiterContact(
+            company_id=company.id,
+            name=company.contact_name,
+            designation=company.contact_designation or "HR Manager",
+            email=company.contact_email,
+            phone=company.contact_phone or "+91 98765 43210",
+            department="Talent Acquisition",
+            status="ACTIVE",
+            last_contacted=datetime.now(timezone.utc),
+            notes=f"Primary contact for {company.name}"
+        )
+        db.add(recruiter)
+
+    log_action(db, current, "CREATE", "recruiter", company.id, {"name": company.name, "status": company.recruiter_status.value})
     notify_admins_and_managers(db, "New Recruiter Added", f"Recruiter/Company {company.name} was registered.", "RECRUITER_CREATED", "company", company.id, exclude_user_id=current.id)
-    audit_commit(db);db.refresh(company);return company
+    audit_commit(db)
+    db.refresh(company)
+    return company
 
 
-@app.put("/api/recruiters/{recruiter_id}",response_model=CompanyOut)
-def update_recruiter(recruiter_id:int,payload:CompanyBase,db:Session=Depends(get_db),current:User=Depends(require_roles(Role.ADMIN))):
-    company=db.get(Company,recruiter_id)
-    if not company:raise HTTPException(404,"Recruiter not found")
-    old_status=company.recruiter_status.value
-    for key,value in payload.model_dump().items():setattr(company,key,value)
-    log_action(db,current,"UPDATE","recruiter",company.id,{"name":company.name,"old_status":old_status,"new_status":company.recruiter_status.value})
+@app.put("/api/recruiters/{recruiter_id}", response_model=CompanyOut)
+def update_recruiter(recruiter_id: int, payload: CompanyBase, db: Session = Depends(get_db), current: User = Depends(require_roles(Role.ADMIN))):
+    company = db.get(Company, recruiter_id)
+    if not company:
+        raise HTTPException(404, "Recruiter not found")
+    old_status = company.recruiter_status.value
+    for key, value in payload.model_dump().items():
+        setattr(company, key, value)
+    log_action(db, current, "UPDATE", "recruiter", company.id, {"name": company.name, "old_status": old_status, "new_status": company.recruiter_status.value})
     if old_status != company.recruiter_status.value:
         notify_admins_and_managers(db, "Recruiter Status Updated", f"{company.name} engagement status changed from {old_status} to {company.recruiter_status.value}.", "RECRUITER_STATUS_CHANGED", "company", company.id, exclude_user_id=current.id)
-    audit_commit(db);db.refresh(company);return company
+    audit_commit(db)
+    db.refresh(company)
+    return company
 
 
-@app.delete("/api/recruiters/{recruiter_id}",status_code=204)
-def delete_recruiter(recruiter_id:int,db:Session=Depends(get_db),current:User=Depends(require_roles(Role.ADMIN))):
-    company=db.get(Company,recruiter_id)
-    if not company:raise HTTPException(404,"Recruiter not found")
-    log_action(db,current,"DELETE","recruiter",company.id,{"name":company.name})
+@app.delete("/api/recruiters/{recruiter_id}", status_code=204)
+def delete_recruiter(recruiter_id: int, db: Session = Depends(get_db), current: User = Depends(require_roles(Role.ADMIN))):
+    company = db.get(Company, recruiter_id)
+    if not company:
+        raise HTTPException(404, "Recruiter not found")
+    log_action(db, current, "DELETE", "recruiter", company.id, {"name": company.name})
     notify_admins_and_managers(db, "Recruiter Deleted", f"Recruiter/Company {company.name} was deleted.", "RECRUITER_DELETED", "company", company.id, exclude_user_id=current.id)
-    db.delete(company);audit_commit(db)
+    db.delete(company)
+    audit_commit(db)
+
+
+@app.post("/api/recruiters/import")
+def import_recruiters(
+    file: UploadFile = File(...),
+    mode: str = Query("skip", pattern="^(skip|upsert)$"),
+    db: Session = Depends(get_db),
+    current: User = Depends(require_roles(Role.ADMIN, Role.MANAGER))
+):
+    if not file.filename:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "No file selected.")
+
+    ext = Path(file.filename).suffix.lower()
+    if ext not in {".xlsx", ".xls", ".csv"}:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Only .xlsx, .xls, and .csv files are supported.")
+
+    try:
+        contents = file.file.read()
+        rows = _parse_excel_rows(contents, file.filename)
+    except Exception as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Invalid import file: {exc}") from exc
+
+    if not rows or len(rows) < 2:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Import file has no data rows.")
+
+    headers = [_clean_excel_value(cell) for cell in rows[0]]
+    header_map = {
+        "name": "name", "recruiter name": "name", "contact name": "name", "full name": "name",
+        "company": "company", "company name": "company", "organization": "company",
+        "designation": "designation", "role": "designation", "title": "designation", "job title": "designation",
+        "email": "email", "recruiter email": "email", "contact email": "email", "email address": "email",
+        "phone": "phone", "phone number": "phone", "mobile": "phone", "contact phone": "phone",
+        "status": "status", "recruiter status": "status",
+        "last contacted": "last_contacted", "last contact": "last_contacted",
+        "notes": "notes", "comments": "notes", "remarks": "notes"
+    }
+    lookup = {}
+    for idx, h in enumerate(headers):
+        clean_h = h.strip().lower()
+        if clean_h in header_map:
+            lookup[header_map[clean_h]] = idx
+
+    if "name" not in lookup or "company" not in lookup or "email" not in lookup:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Missing required columns: Name, Company, and Email.")
+
+    created = 0
+    updated = 0
+    duplicates = 0
+    invalid_rows = 0
+    errors = []
+
+    for row_number, row in enumerate(rows[1:], start=2):
+        if not any(row):
+            continue
+        
+        name = _clean_excel_value(row[lookup["name"]]) if lookup["name"] < len(row) else ""
+        company_name = _clean_excel_value(row[lookup["company"]]) if lookup["company"] < len(row) else ""
+        email = _clean_excel_value(row[lookup["email"]]).strip().lower() if lookup["email"] < len(row) else ""
+        
+        if not name or not company_name or not email or "@" not in email:
+            invalid_rows += 1
+            errors.append(f"Row {row_number}: Missing name, company or invalid email.")
+            continue
+
+        company = db.scalar(select(Company).where(Company.name.ilike(company_name.strip())))
+        if not company:
+            company = Company(
+                name=company_name.strip(),
+                industry="IT & Technology",
+                recruiter_status=RecruiterStatus.COLD
+            )
+            db.add(company)
+            db.flush()
+
+        designation = _clean_excel_value(row[lookup["designation"]]) if "designation" in lookup and lookup["designation"] < len(row) else "HR Manager"
+        phone = _clean_excel_value(row[lookup["phone"]]) if "phone" in lookup and lookup["phone"] < len(row) else None
+        rec_status = _clean_excel_value(row[lookup["status"]]).upper() if "status" in lookup and lookup["status"] < len(row) else "ACTIVE"
+        if rec_status not in ["ACTIVE", "INACTIVE"]:
+            rec_status = "ACTIVE"
+        notes = _clean_excel_value(row[lookup["notes"]]) if "notes" in lookup and lookup["notes"] < len(row) else None
+
+        existing_contact = db.scalar(select(RecruiterContact).where(RecruiterContact.email == email))
+        if existing_contact:
+            if mode == "upsert":
+                existing_contact.name = name
+                existing_contact.company_id = company.id
+                if designation: existing_contact.designation = designation
+                if phone: existing_contact.phone = phone
+                existing_contact.status = rec_status
+                if notes: existing_contact.notes = notes
+                updated += 1
+            else:
+                duplicates += 1
+                errors.append(f"Row {row_number}: Recruiter {email} already exists (skipped).")
+            continue
+
+        new_contact = RecruiterContact(
+            company_id=company.id,
+            name=name,
+            designation=designation or "HR Manager",
+            email=email,
+            phone=phone or None,
+            status=rec_status,
+            notes=notes or None,
+            last_contacted=datetime.now(timezone.utc)
+        )
+        db.add(new_contact)
+        created += 1
+
+    try:
+        log_action(db, current, "IMPORT", "recruiter", "batch", {"created": created, "updated": updated, "duplicates": duplicates})
+        notify_admins_and_managers(db, "Recruiters Imported", f"{created} recruiter(s) imported, {updated} updated by {current.full_name}.", "RECRUITERS_IMPORTED", "recruiter", "batch", exclude_user_id=current.id)
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "Import could not be saved. Please review data and try again.") from exc
+
+    return {
+        "message": f"Successfully imported {created} recruiter(s){f' and updated {updated} record(s)' if updated else ''}.",
+        "imported": created,
+        "updated": updated,
+        "duplicates": duplicates,
+        "invalid": invalid_rows,
+        "errors": errors[:25],
+        "total_processed": created + updated + duplicates + invalid_rows,
+    }
 
 def _team_member_payload(member: PlacementTeamMember):
     assigned_drives = []

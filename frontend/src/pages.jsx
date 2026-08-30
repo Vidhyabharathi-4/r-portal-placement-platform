@@ -48,6 +48,7 @@ import {
 } from "lucide-react";
 import ExportPrintModal from "./components/ExportPrintModal";
 import StudentImportModal from "./components/StudentImportModal";
+import RecruiterImportModal from "./components/RecruiterImportModal";
 
 const API_BASE = (import.meta.env.VITE_API_URL || (import.meta.env.PROD ? "" : "http://localhost:8000")).replace(/\/$/, "");
 const API = API_BASE;
@@ -2017,31 +2018,117 @@ export function PlacementTeam() {
    4. RECRUITERS & COMPANY PIPELINE
 ========================================================= */
 
+export function getCompanyInitials(name) {
+  if (!name) return "CO";
+  const clean = name.trim();
+  const known = {
+    "tata consultancy services": "TCS",
+    "infosys limited": "INFY",
+    "infosys": "INFY",
+    "amazon web services": "AWS",
+    "amazon": "AMZN",
+    "microsoft corporation": "MSFT",
+    "microsoft": "MSFT",
+    "cognizant technology solutions": "CTS",
+    "cognizant": "CTS",
+    "zoho corporation": "ZOHO",
+    "zoho": "ZOHO",
+    "accenture": "ACN",
+    "wipro limited": "WIPRO",
+    "wipro": "WIPRO",
+    "bosch global software": "BGS",
+    "bosch": "BGS",
+    "qualcomm india": "QCOM",
+    "qualcomm": "QCOM",
+    "goldman sachs": "GS",
+    "morgan stanley": "MS",
+    "samsung r&d": "SAMS",
+    "samsung": "SAMS",
+    "paypal india": "PYPL",
+    "paypal": "PYPL",
+    "cisco systems": "CSCO",
+    "cisco": "CSCO",
+    "capgemini": "CAP",
+    "oracle india": "ORCL",
+    "oracle": "ORCL",
+    "ibm india": "IBM",
+    "ibm": "IBM",
+  };
+  const lower = clean.toLowerCase();
+  if (known[lower]) return known[lower];
+
+  const words = clean.split(/\s+/);
+  if (words.length >= 2) {
+    return (words[0][0] + words[1][0]).toUpperCase();
+  }
+  return clean.slice(0, 2).toUpperCase();
+}
+
+export function getCompanyLogoGradient(name) {
+  const palettes = [
+    "linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%)", // indigo-violet
+    "linear-gradient(135deg, #0284c7 0%, #2563eb 100%)", // sky-blue
+    "linear-gradient(135deg, #059669 0%, #10b981 100%)", // emerald-teal
+    "linear-gradient(135deg, #d97706 0%, #ea580c 100%)", // amber-orange
+    "linear-gradient(135deg, #dc2626 0%, #e11d48 100%)", // red-rose
+    "linear-gradient(135deg, #0891b2 0%, #0d9488 100%)", // cyan-teal
+    "linear-gradient(135deg, #7c2d12 0%, #9a3412 100%)", // warm bronze
+    "linear-gradient(135deg, #581c87 0%, #7e22ce 100%)", // deep purple
+  ];
+  if (!name) return palettes[0];
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) {
+    hash = name.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  return palettes[Math.abs(hash) % palettes.length];
+}
+
 export function Recruiters() {
   const canEdit = canManageRecruiters();
-  const [companies, setCompanies] = useState(() => getCached("/api/recruiters") || []);
+  const cachedData = getCached("/api/recruiters/overview");
+
+  const [overview, setOverview] = useState(() => cachedData || {
+    summary: { total_recruiters: 0, active_recruiters: 0, connected_companies: 0, placement_drives: 0, active_drives: 0, completed_drives: 0 },
+    engagement_distribution: { cold: 0, warm: 0, hot: 0, drive_completed: 0 },
+    companies: [],
+    recruiters: []
+  });
+
+  const [activeStageTab, setActiveStageTab] = useState("ALL"); // ALL, HOT, WARM, COLD, DRIVE_COMPLETED
   const [search, setSearch] = useState("");
-  const [temperature, setTemperature] = useState("ALL");
-  const [onlyActive, setOnlyActive] = useState(false);
+  const [recruiterStatusFilter, setRecruiterStatusFilter] = useState("ALL"); // ALL, ACTIVE, INACTIVE
+  const [companyFilter, setCompanyFilter] = useState("ALL");
+  const [driveFilter, setDriveFilter] = useState("ALL"); // ALL, WITH_DRIVES, NO_DRIVES
+
   const [sort, setSort] = useState({ key: "name", direction: "asc" });
-  const [loading, setLoading] = useState(() => !(getCached("/api/recruiters")?.length > 0));
+  const [loading, setLoading] = useState(() => !(cachedData?.companies?.length > 0));
   const [saving, setSaving] = useState(false);
+  const [statusUpdatingId, setStatusUpdatingId] = useState(null);
   const [error, setError] = useState("");
   const [notification, setNotification] = useState(null);
+
+  const [showImportModal, setShowImportModal] = useState(false);
   const [showExportModal, setShowExportModal] = useState(false);
 
-  const [modalMode, setModalMode] = useState(null); // "add", "edit", "view", "delete"
+  const [modalMode, setModalMode] = useState(null); // "view_company", "view_recruiter", "add_recruiter", "edit_recruiter", "delete_recruiter"
   const [selectedCompany, setSelectedCompany] = useState(null);
+  const [selectedRecruiter, setSelectedRecruiter] = useState(null);
   const [companyDetails, setCompanyDetails] = useState(null);
   const [detailsLoading, setDetailsLoading] = useState(false);
+  const [companyModalTab, setCompanyModalTab] = useState("contacts"); // "contacts" or "drives"
 
-  const [formData, setFormData] = useState({
+  const [recruiterForm, setRecruiterForm] = useState({
     name: "",
-    website: "",
-    industry: "",
-    contact_name: "",
-    contact_email: "",
-    recruiter_status: "COLD",
+    company_id: "",
+    company_name: "",
+    designation: "HR Manager",
+    email: "",
+    phone: "",
+    alternate_phone: "",
+    department: "Talent Acquisition",
+    linkedin_url: "",
+    status: "ACTIVE",
+    notes: ""
   });
 
   const showNotification = (message, tone = "success") => {
@@ -2049,14 +2136,17 @@ export function Recruiters() {
     setTimeout(() => setNotification(null), 4000);
   };
 
-  async function loadRecruiters() {
+  async function loadRecruitersData() {
     try {
-      if (!getCached("/api/recruiters")?.length) setLoading(true);
+      if (!overview?.companies?.length) setLoading(true);
       setError("");
-      const result = await api("/api/recruiters");
-      setCompanies(Array.isArray(result) ? result : []);
+      const result = await api("/api/recruiters/overview");
+      if (result && result.companies) {
+        setOverview(result);
+        setCached("/api/recruiters/overview", result);
+      }
     } catch (err) {
-      if (!companies.length) setError(err.message || "Unable to load recruiter records.");
+      if (!overview?.companies?.length) setError(err.message || "Unable to load recruiter pipeline data.");
       showNotification(err.message, "error");
     } finally {
       setLoading(false);
@@ -2064,15 +2154,62 @@ export function Recruiters() {
   }
 
   useEffect(() => {
-    loadRecruiters();
+    loadRecruitersData();
   }, []);
 
-  async function openViewDetails(company) {
+  async function handleCompanyStatusChange(companyId, newStatus) {
+    if (!canEdit) return;
+    setStatusUpdatingId(companyId);
+    try {
+      await api(`/api/companies/${companyId}/status`, {
+        method: "PATCH",
+        body: JSON.stringify({ status: newStatus }),
+      });
+
+      // Update state optimistically
+      setOverview((prev) => {
+        const nextCompanies = prev.companies.map((c) =>
+          c.id === companyId ? { ...c, recruiter_status: newStatus, last_contacted_at: new Date().toISOString() } : c
+        );
+        const nextRecruiters = prev.recruiters.map((r) =>
+          r.company_id === companyId ? { ...r, company_status: newStatus } : r
+        );
+
+        const cold = nextCompanies.filter((c) => c.recruiter_status === "COLD").length;
+        const warm = nextCompanies.filter((c) => c.recruiter_status === "WARM").length;
+        const hot = nextCompanies.filter((c) => c.recruiter_status === "HOT").length;
+        const drive_completed = nextCompanies.filter((c) => c.recruiter_status === "DRIVE_COMPLETED").length;
+
+        const updated = {
+          ...prev,
+          companies: nextCompanies,
+          recruiters: nextRecruiters,
+          engagement_distribution: { cold, warm, hot, drive_completed },
+        };
+        setCached("/api/recruiters/overview", updated);
+        return updated;
+      });
+
+      invalidateCache("/api/companies");
+      invalidateCache("/api/reports");
+      invalidateCache("/api/dashboard");
+
+      const compName = overview.companies.find((c) => c.id === companyId)?.name || "Company";
+      showNotification(`${compName} engagement status updated to ${newStatus.replace("_", " ")}.`);
+    } catch (err) {
+      showNotification(err.message || "Failed to update company engagement status.", "error");
+    } finally {
+      setStatusUpdatingId(null);
+    }
+  }
+
+  async function openCompanyDetails(company) {
     setSelectedCompany(company);
-    setModalMode("view");
+    setCompanyModalTab("contacts");
+    setModalMode("view_company");
     setDetailsLoading(true);
     try {
-      const details = await api(`/api/recruiters/${company.id}`);
+      const details = await api(`/api/companies/${company.id}/details`);
       setCompanyDetails(details);
     } catch {
       setCompanyDetails(company);
@@ -2081,77 +2218,186 @@ export function Recruiters() {
     }
   }
 
-  async function handleSaveCompany() {
-    if (!formData.name.trim()) {
-      showNotification("Company name is required.", "error");
+  function openRecruiterDetails(recruiter) {
+    setSelectedRecruiter(recruiter);
+    setModalMode("view_recruiter");
+  }
+
+  function openAddRecruiterModal(defaultCompanyId = null) {
+    const targetComp = defaultCompanyId ? overview.companies.find((c) => c.id === defaultCompanyId) : null;
+    setRecruiterForm({
+      name: "",
+      company_id: defaultCompanyId || (overview.companies[0]?.id || ""),
+      company_name: targetComp?.name || "",
+      designation: "HR Manager",
+      email: "",
+      phone: "",
+      alternate_phone: "",
+      department: "University Relations / Talent Acquisition",
+      linkedin_url: "",
+      status: "ACTIVE",
+      notes: ""
+    });
+    setModalMode("add_recruiter");
+  }
+
+  function openEditRecruiterModal(recruiter) {
+    setSelectedRecruiter(recruiter);
+    setRecruiterForm({
+      name: recruiter.name || "",
+      company_id: recruiter.company_id || "",
+      company_name: recruiter.company_name || "",
+      designation: recruiter.designation || "HR Manager",
+      email: recruiter.email || "",
+      phone: recruiter.phone === "—" ? "" : (recruiter.phone || ""),
+      alternate_phone: recruiter.alternate_phone === "—" ? "" : (recruiter.alternate_phone || ""),
+      department: recruiter.department || "",
+      linkedin_url: recruiter.linkedin_url || "",
+      status: recruiter.status || "ACTIVE",
+      notes: recruiter.notes || ""
+    });
+    setModalMode("edit_recruiter");
+  }
+
+  function openDeleteRecruiterModal(recruiter) {
+    setSelectedRecruiter(recruiter);
+    setModalMode("delete_recruiter");
+  }
+
+  async function handleSaveRecruiter(e) {
+    e?.preventDefault();
+    if (!recruiterForm.name.trim() || !recruiterForm.email.trim()) {
+      showNotification("Please provide recruiter name and a valid email.", "error");
       return;
     }
 
     setSaving(true);
     try {
-      if (modalMode === "edit" && selectedCompany) {
-        await api(`/api/recruiters/${selectedCompany.id}`, {
-          method: "PUT",
-          body: JSON.stringify(formData),
+      if (modalMode === "edit_recruiter" && selectedRecruiter) {
+        await api(`/api/recruiters/contacts/${selectedRecruiter.id}`, {
+          method: "PATCH",
+          body: JSON.stringify({
+            name: recruiterForm.name.trim(),
+            designation: recruiterForm.designation.trim(),
+            email: recruiterForm.email.trim().toLowerCase(),
+            phone: recruiterForm.phone.trim() || null,
+            alternate_phone: recruiterForm.alternate_phone.trim() || null,
+            department: recruiterForm.department.trim() || null,
+            linkedin_url: recruiterForm.linkedin_url.trim() || null,
+            status: recruiterForm.status,
+            notes: recruiterForm.notes.trim() || null,
+          }),
         });
-        showNotification(`Recruiter ${formData.name} updated successfully!`);
+        showNotification(`Recruiter contact ${recruiterForm.name} updated successfully!`);
       } else {
-        await api("/api/recruiters", {
+        await api("/api/recruiters/contacts", {
           method: "POST",
-          body: JSON.stringify(formData),
+          body: JSON.stringify({
+            company_id: Number(recruiterForm.company_id) || overview.companies[0]?.id,
+            name: recruiterForm.name.trim(),
+            designation: recruiterForm.designation.trim(),
+            email: recruiterForm.email.trim().toLowerCase(),
+            phone: recruiterForm.phone.trim() || null,
+            alternate_phone: recruiterForm.alternate_phone.trim() || null,
+            department: recruiterForm.department.trim() || null,
+            linkedin_url: recruiterForm.linkedin_url.trim() || null,
+            status: recruiterForm.status,
+            notes: recruiterForm.notes.trim() || null,
+          }),
         });
-        showNotification(`Recruiter ${formData.name} added successfully!`);
+        showNotification(`Recruiter contact ${recruiterForm.name} added successfully!`);
       }
+
       setModalMode(null);
-      await loadRecruiters();
+      invalidateCache("/api/recruiters/overview");
+      await loadRecruitersData();
     } catch (err) {
-      showNotification(err.message, "error");
+      showNotification(err.message || "Failed to save recruiter contact.", "error");
     } finally {
       setSaving(false);
     }
   }
 
-  async function handleDeleteCompany() {
-    if (!selectedCompany) return;
+  async function handleDeleteRecruiter() {
+    if (!selectedRecruiter) return;
     setSaving(true);
     try {
-      await api(`/api/recruiters/${selectedCompany.id}`, { method: "DELETE" });
-      showNotification(`Recruiter ${selectedCompany.name} removed successfully.`);
+      await api(`/api/recruiters/contacts/${selectedRecruiter.id}`, { method: "DELETE" });
+      showNotification(`Recruiter contact ${selectedRecruiter.name} deleted successfully.`);
       setModalMode(null);
-      await loadRecruiters();
+      invalidateCache("/api/recruiters/overview");
+      await loadRecruitersData();
     } catch (err) {
-      showNotification(err.message, "error");
+      showNotification(err.message || "Failed to delete recruiter contact.", "error");
     } finally {
       setSaving(false);
     }
   }
 
-  const handleSort = (key) => {
-    setSort((prev) => ({
-      key,
-      direction: prev.key === key && prev.direction === "asc" ? "desc" : "asc",
-    }));
-  };
+  const companiesList = overview.companies || [];
+  const recruitersList = overview.recruiters || [];
 
-  const filtered = useMemo(() => {
+  const stats = useMemo(() => {
+    return {
+      totalRecruiters: overview.summary?.total_recruiters ?? recruitersList.length,
+      activeRecruiters: overview.summary?.active_recruiters ?? recruitersList.filter((r) => r.status === "ACTIVE").length,
+      connectedCompanies: overview.summary?.connected_companies ?? companiesList.length,
+      placementDrives: overview.summary?.placement_drives ?? 0,
+      activeDrives: overview.summary?.active_drives ?? 0,
+      hot: overview.engagement_distribution?.hot ?? companiesList.filter((c) => c.recruiter_status === "HOT").length,
+      warm: overview.engagement_distribution?.warm ?? companiesList.filter((c) => c.recruiter_status === "WARM").length,
+      cold: overview.engagement_distribution?.cold ?? companiesList.filter((c) => c.recruiter_status === "COLD").length,
+      driveCompleted: overview.engagement_distribution?.drive_completed ?? companiesList.filter((c) => ["DRIVE_COMPLETED", "DRIVE COMPLETED"].includes(c.recruiter_status)).length,
+    };
+  }, [overview, companiesList, recruitersList]);
+
+  // Filtered companies for Stage Cards
+  const filteredCompanies = useMemo(() => {
     const q = search.toLowerCase().trim();
-
-    let list = companies.filter((c) => {
-      const statusStr = String(c.recruiter_status || "COLD").toUpperCase();
-
+    return companiesList.filter((c) => {
       const matchesSearch =
         !q ||
-        String(c.name || "").toLowerCase().includes(q) ||
-        String(c.contact_name || "").toLowerCase().includes(q) ||
-        String(c.contact_email || "").toLowerCase().includes(q) ||
-        String(c.industry || "").toLowerCase().includes(q) ||
-        String(c.website || "").toLowerCase().includes(q);
+        c.name.toLowerCase().includes(q) ||
+        (c.industry && c.industry.toLowerCase().includes(q)) ||
+        (c.primary_contact && c.primary_contact.toLowerCase().includes(q)) ||
+        (c.primary_email && c.primary_email.toLowerCase().includes(q)) ||
+        (c.primary_phone && c.primary_phone.toLowerCase().includes(q));
 
-      const matchesTemp = temperature === "ALL" || statusStr === temperature.toUpperCase();
+      const matchesStage = activeStageTab === "ALL" || c.recruiter_status === activeStageTab;
+      const matchesCompany = companyFilter === "ALL" || String(c.id) === String(companyFilter);
+      const matchesDrives =
+        driveFilter === "ALL" ||
+        (driveFilter === "WITH_DRIVES" && c.total_drives > 0) ||
+        (driveFilter === "NO_DRIVES" && c.total_drives === 0);
 
-      const matchesActiveOnly = !onlyActive || statusStr !== "COLD";
+      return matchesSearch && matchesStage && matchesCompany && matchesDrives;
+    });
+  }, [companiesList, search, activeStageTab, companyFilter, driveFilter]);
 
-      return matchesSearch && matchesTemp && matchesActiveOnly;
+  // Stage categorizations
+  const hotCompanies = filteredCompanies.filter((c) => c.recruiter_status === "HOT");
+  const warmCompanies = filteredCompanies.filter((c) => c.recruiter_status === "WARM");
+  const coldCompanies = filteredCompanies.filter((c) => c.recruiter_status === "COLD");
+  const completedCompanies = filteredCompanies.filter((c) => ["DRIVE_COMPLETED", "DRIVE COMPLETED"].includes(c.recruiter_status));
+
+  // Filtered recruiters for Table View
+  const filteredRecruiters = useMemo(() => {
+    const q = search.toLowerCase().trim();
+    let list = recruitersList.filter((r) => {
+      const matchesSearch =
+        !q ||
+        r.name.toLowerCase().includes(q) ||
+        (r.company_name && r.company_name.toLowerCase().includes(q)) ||
+        (r.designation && r.designation.toLowerCase().includes(q)) ||
+        (r.email && r.email.toLowerCase().includes(q)) ||
+        (r.phone && r.phone.toLowerCase().includes(q)) ||
+        (r.department && r.department.toLowerCase().includes(q));
+
+      const matchesStage = activeStageTab === "ALL" || r.company_status === activeStageTab;
+      const matchesRecruiterStatus = recruiterStatusFilter === "ALL" || r.status === recruiterStatusFilter;
+      const matchesCompany = companyFilter === "ALL" || String(r.company_id) === String(companyFilter);
+
+      return matchesSearch && matchesStage && matchesRecruiterStatus && matchesCompany;
     });
 
     list.sort((a, b) => {
@@ -2163,29 +2409,35 @@ export function Recruiters() {
     });
 
     return list;
-  }, [companies, search, temperature, onlyActive, sort]);
+  }, [recruitersList, search, activeStageTab, recruiterStatusFilter, companyFilter, sort]);
 
-  const stats = useMemo(() => {
-    return {
-      total: companies.length,
-      hot: companies.filter((c) => String(c.recruiter_status).toUpperCase() === "HOT").length,
-      warm: companies.filter((c) => String(c.recruiter_status).toUpperCase() === "WARM").length,
-      cold: companies.filter((c) => String(c.recruiter_status).toUpperCase() === "COLD").length,
-      driveCompleted: companies.filter((c) => ["DRIVE_COMPLETED", "DRIVE COMPLETED"].includes(String(c.recruiter_status).toUpperCase())).length,
-    };
-  }, [companies]);
+  const handleSort = (key) => {
+    setSort((prev) => ({
+      key,
+      direction: prev.key === key && prev.direction === "asc" ? "desc" : "asc",
+    }));
+  };
 
   const exportColumns = [
-    { key: "name", label: "COMPANY NAME" },
-    { key: "contact_name", label: "CONTACT PERSON", accessor: (item) => item.contact_name || "—" },
-    { key: "contact_email", label: "EMAIL", accessor: (item) => item.contact_email || "—" },
-    { key: "industry", label: "INDUSTRY", accessor: (item) => item.industry || "—" },
-    { key: "recruiter_status", label: "ENGAGEMENT STATUS", accessor: (item) => item.recruiter_status || "COLD" },
-    { key: "website", label: "WEBSITE", accessor: (item) => item.website || "—" },
+    { key: "name", label: "RECRUITER NAME" },
+    { key: "company_name", label: "COMPANY NAME" },
+    { key: "designation", label: "DESIGNATION", accessor: (item) => item.designation || "—" },
+    { key: "email", label: "EMAIL" },
+    { key: "phone", label: "PHONE", accessor: (item) => item.phone || "—" },
+    { key: "company_status", label: "COMPANY STAGE", accessor: (item) => item.company_status || "COLD" },
+    { key: "status", label: "CONTACT STATUS", accessor: (item) => item.status || "ACTIVE" },
+    { key: "total_drives", label: "DRIVES", accessor: (item) => item.total_drives ?? 0 },
+    { key: "last_contacted", label: "LAST CONTACTED", accessor: (item) => item.last_contacted ? new Date(item.last_contacted).toLocaleDateString() : "—" },
   ];
 
-  if (loading) return <LoadingState />;
-  if (error && companies.length === 0) return <ErrorState message={error} />;
+  if (loading && !overview?.companies?.length) return <LoadingState message="Loading recruiter engagement pipeline…" />;
+  if (error && !overview?.companies?.length) return <ErrorState message={error} onRetry={loadRecruitersData} />;
+
+  const totalStagesCount = (stats.hot + stats.warm + stats.cold + stats.driveCompleted) || 1;
+  const hotPct = (stats.hot / totalStagesCount) * 100;
+  const warmPct = (stats.warm / totalStagesCount) * 100;
+  const coldPct = (stats.cold / totalStagesCount) * 100;
+  const compPct = (stats.driveCompleted / totalStagesCount) * 100;
 
   return (
     <div className="page">
@@ -2195,36 +2447,29 @@ export function Recruiters() {
         </div>
       )}
 
+      {/* 1. PAGE HEADER */}
       <div className="page-heading">
         <div>
-          <span className="eyebrow">RECRUITMENT PIPELINE</span>
-          <h1>Recruiters & Companies ({companies.length})</h1>
-          <p>Track recruiter relationships, company engagement status, and hiring outcomes.</p>
+          <span className="eyebrow">COMPANY RELATIONSHIP & RECRUITMENT PIPELINE</span>
+          <h1>Recruiters</h1>
+          <p>Manage company recruitment contacts and engagement</p>
         </div>
 
         <div className="page-heading-actions">
+          {canEdit && (
+            <button className="secondary-button" type="button" onClick={() => setShowImportModal(true)}>
+              <UploadCloud size={16} />
+              Import
+            </button>
+          )}
+
           <button className="secondary-button" type="button" onClick={() => setShowExportModal(true)}>
             <Download size={16} />
-            Export / Print
+            Export
           </button>
 
           {canEdit && (
-            <button
-              className="primary-button"
-              type="button"
-              onClick={() => {
-                setSelectedCompany(null);
-                setFormData({
-                  name: "",
-                  website: "",
-                  industry: "",
-                  contact_name: "",
-                  contact_email: "",
-                  recruiter_status: "COLD",
-                });
-                setModalMode("add");
-              }}
-            >
+            <button className="primary-button" type="button" onClick={() => openAddRecruiterModal()}>
               <Plus size={17} />
               Add Recruiter
             </button>
@@ -2232,110 +2477,438 @@ export function Recruiters() {
         </div>
       </div>
 
+      {/* 2. SUMMARY CARDS */}
       <div className="stats-grid">
-        <StatCard icon={Building2} title="Total Companies" value={stats.total} subtitle="Registered partners" />
-        <StatCard icon={Zap} title="Hot" value={stats.hot} subtitle="Active hiring pipeline" tone="purple" />
-        <StatCard icon={TrendingUp} title="Warm" value={stats.warm} subtitle="In discussion" tone="blue" />
-        <StatCard icon={CheckCircle2} title="Drive Completed" value={stats.driveCompleted} subtitle="Finished drives" tone="green" />
+        <div style={{ cursor: "pointer" }} onClick={() => { setActiveStageTab("ALL"); setRecruiterStatusFilter("ALL"); setCompanyFilter("ALL"); }}>
+          <StatCard
+            icon={Users}
+            title="Total Recruiters"
+            value={stats.totalRecruiters}
+            subtitle="Campus talent coordinators"
+          />
+        </div>
+
+        <div style={{ cursor: "pointer" }} onClick={() => setRecruiterStatusFilter(recruiterStatusFilter === "ACTIVE" ? "ALL" : "ACTIVE")}>
+          <StatCard
+            icon={UserCheck}
+            title="Active Recruiters"
+            value={stats.activeRecruiters}
+            subtitle={recruiterStatusFilter === "ACTIVE" ? "Filtered: Active only" : "Click to filter active"}
+            tone="blue"
+          />
+        </div>
+
+        <div style={{ cursor: "pointer" }} onClick={() => { setActiveStageTab("ALL"); setCompanyFilter("ALL"); }}>
+          <StatCard
+            icon={Building2}
+            title="Companies Connected"
+            value={stats.connectedCompanies}
+            subtitle="Registered recruitment partners"
+            tone="purple"
+          />
+        </div>
+
+        <div style={{ cursor: "pointer" }} onClick={() => setDriveFilter(driveFilter === "WITH_DRIVES" ? "ALL" : "WITH_DRIVES")}>
+          <StatCard
+            icon={BriefcaseBusiness}
+            title="Placement Drives"
+            value={`${stats.activeDrives} / ${stats.placementDrives}`}
+            subtitle="Active / Total drives scheduled"
+            tone="green"
+          />
+        </div>
       </div>
 
-      <section className="panel">
-        <div className="toolbar">
+      {/* 3. QUICK STATUS TABS & ENGAGEMENT DISTRIBUTION BAR */}
+      <div className="pipeline-status-tabs">
+        <button
+          type="button"
+          className={`pipeline-tab-button ${activeStageTab === "ALL" ? "active" : ""}`}
+          onClick={() => setActiveStageTab("ALL")}
+        >
+          <span>All Stages</span>
+          <span className="tab-badge">{companiesList.length}</span>
+        </button>
+
+        <button
+          type="button"
+          className={`pipeline-tab-button tab-hot ${activeStageTab === "HOT" ? "active" : ""}`}
+          onClick={() => setActiveStageTab("HOT")}
+        >
+          <span>🔥 Hot</span>
+          <span className="tab-badge">{stats.hot}</span>
+        </button>
+
+        <button
+          type="button"
+          className={`pipeline-tab-button tab-warm ${activeStageTab === "WARM" ? "active" : ""}`}
+          onClick={() => setActiveStageTab("WARM")}
+        >
+          <span>⚡ Warm</span>
+          <span className="tab-badge">{stats.warm}</span>
+        </button>
+
+        <button
+          type="button"
+          className={`pipeline-tab-button tab-cold ${activeStageTab === "COLD" ? "active" : ""}`}
+          onClick={() => setActiveStageTab("COLD")}
+        >
+          <span>❄️ Cold</span>
+          <span className="tab-badge">{stats.cold}</span>
+        </button>
+
+        <button
+          type="button"
+          className={`pipeline-tab-button tab-completed ${activeStageTab === "DRIVE_COMPLETED" ? "active" : ""}`}
+          onClick={() => setActiveStageTab("DRIVE_COMPLETED")}
+        >
+          <span>✅ Drive Completed</span>
+          <span className="tab-badge">{stats.driveCompleted}</span>
+        </button>
+      </div>
+
+      {/* Visual Pipeline Ratio Bar */}
+      <div className="pipeline-distribution-bar" title={`Hot: ${stats.hot} | Warm: ${stats.warm} | Cold: ${stats.cold} | Completed: ${stats.driveCompleted}`}>
+        <div className="distribution-segment hot" style={{ width: `${hotPct}%` }} />
+        <div className="distribution-segment warm" style={{ width: `${warmPct}%` }} />
+        <div className="distribution-segment cold" style={{ width: `${coldPct}%` }} />
+        <div className="distribution-segment completed" style={{ width: `${compPct}%` }} />
+      </div>
+
+      {/* 4. COMPANY ENGAGEMENT STAGE SECTIONS */}
+      <div className="pipeline-stages-container">
+
+        {/* SECTION A: HOT PIPELINE */}
+        {(activeStageTab === "ALL" || activeStageTab === "HOT") && (
+          <section className="engagement-stage-card stage-hot">
+            <div className="stage-header">
+              <div className="stage-header-title">
+                <div className="stage-icon-badge">🔥</div>
+                <div className="stage-info">
+                  <h3>HOT</h3>
+                  <p>Companies actively discussing or preparing recruitment</p>
+                </div>
+              </div>
+              <div className="stage-counts">
+                <span className="stage-count-pill">{hotCompanies.length} Companies</span>
+              </div>
+            </div>
+
+            {hotCompanies.length === 0 ? (
+              <div style={{ padding: "24px", textAlign: "center", color: "#94a3b8", fontSize: "13.5px", background: "#f8fafc", borderRadius: "10px" }}>
+                No companies in this category yet.
+              </div>
+            ) : (
+              <div className="company-cards-grid">
+                {hotCompanies.map((comp) => (
+                  <CompanyCard
+                    key={comp.id}
+                    company={comp}
+                    canEdit={canEdit}
+                    isUpdating={statusUpdatingId === comp.id}
+                    onStatusChange={handleCompanyStatusChange}
+                    onViewCompany={openCompanyDetails}
+                    onAddRecruiter={openAddRecruiterModal}
+                  />
+                ))}
+              </div>
+            )}
+          </section>
+        )}
+
+        {/* SECTION B: WARM ENGAGEMENT */}
+        {(activeStageTab === "ALL" || activeStageTab === "WARM") && (
+          <section className="engagement-stage-card stage-warm">
+            <div className="stage-header">
+              <div className="stage-header-title">
+                <div className="stage-icon-badge">⚡</div>
+                <div className="stage-info">
+                  <h3>WARM</h3>
+                  <p>Companies currently engaged with the placement team</p>
+                </div>
+              </div>
+              <div className="stage-counts">
+                <span className="stage-count-pill">{warmCompanies.length} Companies</span>
+              </div>
+            </div>
+
+            {warmCompanies.length === 0 ? (
+              <div style={{ padding: "24px", textAlign: "center", color: "#94a3b8", fontSize: "13.5px", background: "#f8fafc", borderRadius: "10px" }}>
+                No companies in this category yet.
+              </div>
+            ) : (
+              <div className="company-cards-grid">
+                {warmCompanies.map((comp) => (
+                  <CompanyCard
+                    key={comp.id}
+                    company={comp}
+                    canEdit={canEdit}
+                    isUpdating={statusUpdatingId === comp.id}
+                    onStatusChange={handleCompanyStatusChange}
+                    onViewCompany={openCompanyDetails}
+                    onAddRecruiter={openAddRecruiterModal}
+                  />
+                ))}
+              </div>
+            )}
+          </section>
+        )}
+
+        {/* SECTION C: COLD PROSPECTS */}
+        {(activeStageTab === "ALL" || activeStageTab === "COLD") && (
+          <section className="engagement-stage-card stage-cold">
+            <div className="stage-header">
+              <div className="stage-header-title">
+                <div className="stage-icon-badge">❄️</div>
+                <div className="stage-info">
+                  <h3>COLD</h3>
+                  <p>Companies with limited or no recent engagement</p>
+                </div>
+              </div>
+              <div className="stage-counts">
+                <span className="stage-count-pill">{coldCompanies.length} Companies</span>
+              </div>
+            </div>
+
+            {coldCompanies.length === 0 ? (
+              <div style={{ padding: "24px", textAlign: "center", color: "#94a3b8", fontSize: "13.5px", background: "#f8fafc", borderRadius: "10px" }}>
+                No companies in this category yet.
+              </div>
+            ) : (
+              <div className="company-cards-grid">
+                {coldCompanies.map((comp) => (
+                  <CompanyCard
+                    key={comp.id}
+                    company={comp}
+                    canEdit={canEdit}
+                    isUpdating={statusUpdatingId === comp.id}
+                    onStatusChange={handleCompanyStatusChange}
+                    onViewCompany={openCompanyDetails}
+                    onAddRecruiter={openAddRecruiterModal}
+                  />
+                ))}
+              </div>
+            )}
+          </section>
+        )}
+
+        {/* SECTION D: DRIVE COMPLETED */}
+        {(activeStageTab === "ALL" || activeStageTab === "DRIVE_COMPLETED") && (
+          <section className="engagement-stage-card stage-completed">
+            <div className="stage-header">
+              <div className="stage-header-title">
+                <div className="stage-icon-badge">✅</div>
+                <div className="stage-info">
+                  <h3>DRIVE COMPLETED</h3>
+                  <p>Companies that have completed a placement drive</p>
+                </div>
+              </div>
+              <div className="stage-counts">
+                <span className="stage-count-pill">{completedCompanies.length} Companies</span>
+              </div>
+            </div>
+
+            {completedCompanies.length === 0 ? (
+              <div style={{ padding: "24px", textAlign: "center", color: "#94a3b8", fontSize: "13.5px", background: "#f8fafc", borderRadius: "10px" }}>
+                No companies in this category yet.
+              </div>
+            ) : (
+              <div className="company-cards-grid">
+                {completedCompanies.map((comp) => (
+                  <CompanyCard
+                    key={comp.id}
+                    company={comp}
+                    canEdit={canEdit}
+                    isUpdating={statusUpdatingId === comp.id}
+                    onStatusChange={handleCompanyStatusChange}
+                    onViewCompany={openCompanyDetails}
+                    onAddRecruiter={openAddRecruiterModal}
+                  />
+                ))}
+              </div>
+            )}
+          </section>
+        )}
+
+      </div>
+
+      {/* 5. RECRUITER CONTACTS TABLE / DIRECTORY */}
+      <section className="panel" style={{ marginTop: "12px" }}>
+        <div style={{ padding: "18px 20px 0", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "10px" }}>
+          <div>
+            <h2 style={{ margin: 0, fontSize: "18px", color: "#0f172a" }}>Recruiter Contacts Directory</h2>
+            <p style={{ margin: "2px 0 0", fontSize: "12.5px", color: "#64748b" }}>
+              Direct contact coordinates for campus hiring leads and talent acquisition specialists
+            </p>
+          </div>
+          <span className="badge" style={{ background: "#f1f5f9", color: "#334155", fontWeight: 700 }}>
+            {filteredRecruiters.length} Contacts
+          </span>
+        </div>
+
+        <div className="toolbar" style={{ marginTop: "8px" }}>
           <div className="search-box">
             <Search size={18} />
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search by company name, contact person, email, or industry..."
+              placeholder="Search across recruiters, company, email, phone, designation..."
             />
           </div>
 
           <div className="toolbar-filters">
+            {/* Recruiter Status Filter */}
             <div className="select-box">
-              <select value={temperature} onChange={(e) => setTemperature(e.target.value)}>
-                <option value="ALL">All Status ({companies.length})</option>
-                <option value="HOT">Hot ({stats.hot})</option>
-                <option value="WARM">Warm ({stats.warm})</option>
-                <option value="DRIVE_COMPLETED">Drive Completed ({stats.driveCompleted})</option>
-                <option value="COLD">Cold ({stats.cold})</option>
+              <select value={recruiterStatusFilter} onChange={(e) => setRecruiterStatusFilter(e.target.value)}>
+                <option value="ALL">All Contacts</option>
+                <option value="ACTIVE">Active Only</option>
+                <option value="INACTIVE">Inactive Only</option>
               </select>
               <ChevronDown size={15} />
             </div>
 
-            <label className="checkbox-toggle-label">
-              <input
-                type="checkbox"
-                checked={onlyActive}
-                onChange={(e) => setOnlyActive(e.target.checked)}
-              />
-              <span>Exclude Cold</span>
-            </label>
+            {/* Company Filter Dropdown */}
+            <div className="select-box">
+              <select value={companyFilter} onChange={(e) => setCompanyFilter(e.target.value)}>
+                <option value="ALL">All Companies ({companiesList.length})</option>
+                {companiesList.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+              <ChevronDown size={15} />
+            </div>
 
-            {(search || temperature !== "ALL" || onlyActive) && (
+            {(search || activeStageTab !== "ALL" || recruiterStatusFilter !== "ALL" || companyFilter !== "ALL" || driveFilter !== "ALL") && (
               <button
                 className="secondary-button small-button"
                 type="button"
                 onClick={() => {
                   setSearch("");
-                  setTemperature("ALL");
-                  setOnlyActive(false);
+                  setActiveStageTab("ALL");
+                  setRecruiterStatusFilter("ALL");
+                  setCompanyFilter("ALL");
+                  setDriveFilter("ALL");
                 }}
               >
                 <RotateCcw size={14} />
-                Reset
+                Reset Filters
               </button>
             )}
           </div>
         </div>
 
-        {filtered.length === 0 ? (
+        {filteredRecruiters.length === 0 ? (
           <EmptyState
-            title="No recruiters found"
-            message="Add companies or adjust your search filters to find recruiter records."
+            title="No recruiter contacts match the criteria"
+            message="Try changing your search terms or filters, or add a new recruiter contact."
           />
         ) : (
           <div className="table-wrap">
             <table className="data-table">
               <thead>
                 <tr>
-                  <SortHeader label="COMPANY NAME" sortKey="name" currentSort={sort} onSort={handleSort} />
-                  <SortHeader label="CONTACT PERSON" sortKey="contact_name" currentSort={sort} onSort={handleSort} />
-                  <SortHeader label="EMAIL" sortKey="contact_email" currentSort={sort} onSort={handleSort} />
-                  <SortHeader label="INDUSTRY" sortKey="industry" currentSort={sort} onSort={handleSort} />
-                  <SortHeader label="TEMPERATURE" sortKey="recruiter_status" currentSort={sort} onSort={handleSort} />
+                  <SortHeader label="RECRUITER" sortKey="name" currentSort={sort} onSort={handleSort} />
+                  <SortHeader label="COMPANY" sortKey="company_name" currentSort={sort} onSort={handleSort} />
+                  <SortHeader label="DESIGNATION" sortKey="designation" currentSort={sort} onSort={handleSort} />
+                  <SortHeader label="EMAIL" sortKey="email" currentSort={sort} onSort={handleSort} />
+                  <SortHeader label="PHONE" sortKey="phone" currentSort={sort} onSort={handleSort} />
+                  <SortHeader label="COMPANY STATUS" sortKey="company_status" currentSort={sort} onSort={handleSort} />
+                  <SortHeader label="RECRUITER STATUS" sortKey="status" currentSort={sort} onSort={handleSort} />
+                  <SortHeader label="LAST CONTACTED" sortKey="last_contacted" currentSort={sort} onSort={handleSort} />
+                  <th>DRIVES</th>
                   <th>ACTIONS</th>
                 </tr>
               </thead>
 
               <tbody>
-                {filtered.map((company, index) => (
-                  <tr key={company.id || index}>
+                {filteredRecruiters.map((recruiter) => (
+                  <tr key={recruiter.id}>
                     <td>
-                      <strong>{company.name || "—"}</strong>
-                      {company.website && (
-                        <a
-                          href={company.website.startsWith("http") ? company.website : `https://${company.website}`}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="external-site-link"
-                          title="Visit website"
+                      <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                        <div className="recruiter-avatar-circle">
+                          {recruiter.name ? recruiter.name.slice(0, 2).toUpperCase() : "HR"}
+                        </div>
+                        <div>
+                          <strong>{recruiter.name}</strong>
+                          <div style={{ fontSize: "11px", color: "#64748b" }}>{recruiter.department || "Talent Acquisition"}</div>
+                        </div>
+                      </div>
+                    </td>
+
+                    <td>
+                      <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                        <div
+                          style={{
+                            width: "24px",
+                            height: "24px",
+                            borderRadius: "6px",
+                            background: getCompanyLogoGradient(recruiter.company_name),
+                            color: "#fff",
+                            fontSize: "9px",
+                            fontWeight: 800,
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            flexShrink: 0
+                          }}
                         >
-                          <ExternalLink size={12} />
-                        </a>
-                      )}
+                          {getCompanyInitials(recruiter.company_name)}
+                        </div>
+                        <span style={{ fontWeight: 600 }}>{recruiter.company_name || "—"}</span>
+                      </div>
                     </td>
-                    <td>{company.contact_name || "—"}</td>
-                    <td>{company.contact_email || "—"}</td>
-                    <td>{company.industry || "—"}</td>
+
+                    <td>{recruiter.designation || "HR Manager"}</td>
+
                     <td>
-                      <StatusBadge status={company.recruiter_status || "COLD"} />
+                      {recruiter.email ? (
+                        <a href={`mailto:${recruiter.email}`} style={{ color: "#2563eb", textDecoration: "none", display: "inline-flex", alignItems: "center", gap: "4px" }}>
+                          <Mail size={12} /> {recruiter.email}
+                        </a>
+                      ) : "—"}
                     </td>
+
+                    <td>
+                      {recruiter.phone && recruiter.phone !== "—" ? (
+                        <a href={`tel:${recruiter.phone}`} style={{ color: "#475569", textDecoration: "none", display: "inline-flex", alignItems: "center", gap: "4px" }}>
+                          <Phone size={12} /> {recruiter.phone}
+                        </a>
+                      ) : "—"}
+                    </td>
+
+                    <td>
+                      <StatusBadge status={recruiter.company_status || "COLD"} />
+                    </td>
+
+                    <td>
+                      <span className="badge" style={{
+                        background: recruiter.status === "ACTIVE" ? "#dcfce7" : "#f1f5f9",
+                        color: recruiter.status === "ACTIVE" ? "#15803d" : "#64748b",
+                        fontSize: "11px",
+                        fontWeight: 700
+                      }}>
+                        {recruiter.status || "ACTIVE"}
+                      </span>
+                    </td>
+
+                    <td style={{ fontSize: "12px", color: "#64748b" }}>
+                      {recruiter.last_contacted ? new Date(recruiter.last_contacted).toLocaleDateString() : "—"}
+                    </td>
+
+                    <td>
+                      <span className="badge" style={{ background: "#eff6ff", color: "#1d4ed8", fontWeight: 700 }}>
+                        {recruiter.total_drives ?? 0}
+                      </span>
+                    </td>
+
                     <td>
                       <div className="table-actions">
                         <button
                           type="button"
-                          title="View Recruiter & Company Details"
-                          onClick={() => openViewDetails(company)}
+                          title="View Recruiter Profile"
+                          onClick={() => openRecruiterDetails(recruiter)}
                         >
                           <Eye size={16} />
                         </button>
@@ -2343,30 +2916,16 @@ export function Recruiters() {
                           <>
                             <button
                               type="button"
-                              title="Edit Recruiter"
-                              onClick={() => {
-                                setSelectedCompany(company);
-                                setFormData({
-                                  name: company.name,
-                                  website: company.website || "",
-                                  industry: company.industry || "",
-                                  contact_name: company.contact_name || "",
-                                  contact_email: company.contact_email || "",
-                                  recruiter_status: company.recruiter_status || "COLD",
-                                });
-                                setModalMode("edit");
-                              }}
+                              title="Edit Recruiter Contact"
+                              onClick={() => openEditRecruiterModal(recruiter)}
                             >
                               <Pencil size={16} />
                             </button>
                             <button
                               type="button"
-                              title="Delete Recruiter"
+                              title="Delete Recruiter Contact"
                               className="danger-icon"
-                              onClick={() => {
-                                setSelectedCompany(company);
-                                setModalMode("delete");
-                              }}
+                              onClick={() => openDeleteRecruiterModal(recruiter)}
                             >
                               <Trash2 size={16} />
                             </button>
@@ -2382,6 +2941,19 @@ export function Recruiters() {
         )}
       </section>
 
+      {/* 6. MODALS */}
+
+      {/* Import Modal */}
+      <RecruiterImportModal
+        isOpen={showImportModal}
+        onClose={() => setShowImportModal(false)}
+        onSuccess={() => {
+          invalidateCache("/api/recruiters/overview");
+          loadRecruitersData();
+          showNotification("Recruiters imported successfully!");
+        }}
+      />
+
       {/* Export & Print Modal */}
       <ExportPrintModal
         isOpen={showExportModal}
@@ -2389,31 +2961,70 @@ export function Recruiters() {
         title="Recruiters & Companies Directory"
         filename="recruiters_directory"
         columns={exportColumns}
-        data={filtered}
-        filtersSummary={`Status: ${temperature} | Exclude Cold: ${onlyActive ? "Yes" : "No"}`}
+        data={filteredRecruiters}
+        filtersSummary={`Stage: ${activeStageTab} | Recruiter Status: ${recruiterStatusFilter} | Company: ${companyFilter === "ALL" ? "All" : companyFilter}`}
       />
 
-      {/* View Details Modal */}
-      {modalMode === "view" && selectedCompany && (
+      {/* View Company Modal */}
+      {modalMode === "view_company" && selectedCompany && (
         <div className="modal-backdrop" onClick={() => setModalMode(null)}>
           <div className="modal modal-wide" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
-              <h2>Company & Recruiter Profile</h2>
+              <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                <div
+                  className="company-logo-container"
+                  style={{
+                    width: "44px",
+                    height: "44px",
+                    background: getCompanyLogoGradient(selectedCompany.name),
+                    borderRadius: "10px",
+                  }}
+                >
+                  {selectedCompany.logo_url ? (
+                    <img src={selectedCompany.logo_url} alt={selectedCompany.name} className="company-logo-img" />
+                  ) : (
+                    getCompanyInitials(selectedCompany.name)
+                  )}
+                </div>
+                <div>
+                  <h2 style={{ margin: 0, fontSize: "18px" }}>{selectedCompany.name}</h2>
+                  <p style={{ margin: 0, fontSize: "12.5px", color: "#64748b" }}>
+                    {selectedCompany.industry || "Enterprise Partner"} &bull; Relationship Stage:{" "}
+                    <StatusBadge status={selectedCompany.recruiter_status} />
+                  </p>
+                </div>
+              </div>
               <button type="button" onClick={() => setModalMode(null)}>×</button>
             </div>
+
             <div className="modal-body">
               {detailsLoading ? (
-                <LoadingState message="Loading recruiter engagement details…" />
+                <LoadingState message="Loading company engagement records…" />
               ) : (
                 <>
-                  <div className="detail-hero-box">
-                    <div>
-                      <h3 style={{ margin: 0, fontSize: "18px" }}>{selectedCompany.name}</h3>
-                      <p style={{ margin: "4px 0 0 0", color: "#64748b", fontSize: "13px" }}>
-                        {selectedCompany.industry || "Industry unspecified"} &bull; Status:{" "}
+                  {/* Company Top Bar & Website */}
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: "#f8fafc", padding: "12px 16px", borderRadius: "10px", border: "1px solid #e2e8f0", flexWrap: "wrap", gap: "10px" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                      <span style={{ fontSize: "13px", fontWeight: 600, color: "#475569" }}>Update Stage:</span>
+                      {canEdit ? (
+                        <select
+                          className={`company-status-dropdown status-${(selectedCompany.recruiter_status || "COLD").toLowerCase().replace("_", "-")}`}
+                          value={selectedCompany.recruiter_status}
+                          onChange={(e) => {
+                            handleCompanyStatusChange(selectedCompany.id, e.target.value);
+                            setSelectedCompany({ ...selectedCompany, recruiter_status: e.target.value });
+                          }}
+                        >
+                          <option value="HOT">🔥 Hot (Active Recruitment)</option>
+                          <option value="WARM">⚡ Warm (In Discussion)</option>
+                          <option value="COLD">❄️ Cold (Prospect)</option>
+                          <option value="DRIVE_COMPLETED">✅ Drive Completed</option>
+                        </select>
+                      ) : (
                         <StatusBadge status={selectedCompany.recruiter_status} />
-                      </p>
+                      )}
                     </div>
+
                     {selectedCompany.website && (
                       <a
                         href={selectedCompany.website.startsWith("http") ? selectedCompany.website : `https://${selectedCompany.website}`}
@@ -2422,38 +3033,137 @@ export function Recruiters() {
                         className="secondary-button small-button"
                       >
                         <Globe size={14} />
-                        Website
+                        {selectedCompany.website.replace(/^https?:\/\//, "")}
                       </a>
                     )}
                   </div>
 
-                  <div className="stats-grid four" style={{ marginTop: "16px" }}>
+                  {/* 4 Stat Metrics */}
+                  <div className="stats-grid four" style={{ marginTop: "14px" }}>
                     <StatCard icon={BriefcaseBusiness} title="Total Drives" value={companyDetails?.total_drives ?? 0} />
-                    <StatCard icon={CheckCircle2} title="Active Drives" value={companyDetails?.active_drives ?? 0} />
+                    <StatCard icon={CheckCircle2} title="Active Drives" value={companyDetails?.active_drives ?? 0} tone="blue" />
                     <StatCard icon={FileText} title="Applications" value={companyDetails?.total_applications ?? 0} />
-                    <StatCard icon={Award} title="Selections" value={companyDetails?.selected_students ?? 0} tone="green" />
+                    <StatCard icon={Award} title="Selections / Offers" value={companyDetails?.selected_students ?? 0} tone="green" />
                   </div>
 
-                  <div className="form-row two-col" style={{ marginTop: "16px" }}>
-                    <div className="form-group">
-                      <label><Phone size={13} style={{ verticalAlign: "middle", marginRight: "4px" }} />Contact Person</label>
-                      <p>{selectedCompany.contact_name || "Not recorded"}</p>
-                    </div>
-                    <div className="form-group">
-                      <label><Mail size={13} style={{ verticalAlign: "middle", marginRight: "4px" }} />Contact Email</label>
-                      <p>{selectedCompany.contact_email || "Not recorded"}</p>
-                    </div>
+                  {/* Tabs: Contacts vs Drives */}
+                  <div style={{ display: "flex", gap: "8px", borderBottom: "1px solid #e2e8f0", marginTop: "18px", paddingBottom: "8px" }}>
+                    <button
+                      type="button"
+                      className={`secondary-button small-button ${companyModalTab === "contacts" ? "primary-button" : ""}`}
+                      onClick={() => setCompanyModalTab("contacts")}
+                    >
+                      <Users size={14} />
+                      Recruiter Contacts ({companyDetails?.recruiters?.length ?? 0})
+                    </button>
+
+                    <button
+                      type="button"
+                      className={`secondary-button small-button ${companyModalTab === "drives" ? "primary-button" : ""}`}
+                      onClick={() => setCompanyModalTab("drives")}
+                    >
+                      <BriefcaseBusiness size={14} />
+                      Placement Drives ({companyDetails?.drives?.length ?? 0})
+                    </button>
+
+                    {canEdit && (
+                      <button
+                        type="button"
+                        className="secondary-button small-button"
+                        style={{ marginLeft: "auto" }}
+                        onClick={() => openAddRecruiterModal(selectedCompany.id)}
+                      >
+                        <Plus size={14} /> Add Recruiter to {selectedCompany.name}
+                      </button>
+                    )}
                   </div>
 
-                  {companyDetails?.last_engagement && (
-                    <div className="form-group" style={{ marginTop: "8px" }}>
-                      <label>Last Engagement / Drive</label>
-                      <p>{new Date(companyDetails.last_engagement).toLocaleDateString()}</p>
+                  {/* Contacts Tab Content */}
+                  {companyModalTab === "contacts" && (
+                    <div style={{ marginTop: "12px" }}>
+                      {!companyDetails?.recruiters || companyDetails.recruiters.length === 0 ? (
+                        <div style={{ padding: "20px", textAlign: "center", color: "#64748b", background: "#f8fafc", borderRadius: "8px", fontSize: "13px" }}>
+                          No recruiter contacts recorded for this company yet.
+                        </div>
+                      ) : (
+                        <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+                          {companyDetails.recruiters.map((rec) => (
+                            <div key={rec.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 14px", background: "#f8fafc", borderRadius: "8px", border: "1px solid #e2e8f0", flexWrap: "wrap", gap: "10px" }}>
+                              <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                                <div className="recruiter-avatar-circle">
+                                  {rec.name.slice(0, 2).toUpperCase()}
+                                </div>
+                                <div>
+                                  <strong style={{ fontSize: "13.5px", color: "#0f172a" }}>{rec.name}</strong>
+                                  <p style={{ margin: "2px 0 0", fontSize: "12px", color: "#64748b" }}>
+                                    {rec.designation || "HR Lead"} &bull; {rec.department || "Talent Acquisition"}
+                                  </p>
+                                </div>
+                              </div>
+
+                              <div style={{ display: "flex", alignItems: "center", gap: "16px", fontSize: "12.5px" }}>
+                                {rec.email && (
+                                  <a href={`mailto:${rec.email}`} style={{ color: "#2563eb", textDecoration: "none", display: "flex", alignItems: "center", gap: "4px" }}>
+                                    <Mail size={13} /> {rec.email}
+                                  </a>
+                                )}
+                                {rec.phone && (
+                                  <a href={`tel:${rec.phone}`} style={{ color: "#475569", textDecoration: "none", display: "flex", alignItems: "center", gap: "4px" }}>
+                                    <Phone size={13} /> {rec.phone}
+                                  </a>
+                                )}
+                                <span className="badge" style={{ background: rec.status === "ACTIVE" ? "#dcfce7" : "#f1f5f9", color: rec.status === "ACTIVE" ? "#15803d" : "#64748b" }}>
+                                  {rec.status}
+                                </span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
+                  )}
+
+                  {/* Drives Tab Content */}
+                  {companyModalTab === "drives" && (
+                    <div style={{ marginTop: "12px" }}>
+                      {!companyDetails?.drives || companyDetails.drives.length === 0 ? (
+                        <div style={{ padding: "20px", textAlign: "center", color: "#64748b", background: "#f8fafc", borderRadius: "8px", fontSize: "13px" }}>
+                          No placement drives scheduled for this company yet.
+                        </div>
+                      ) : (
+                        <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+                          {companyDetails.drives.map((d) => (
+                            <div key={d.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 14px", background: "#f8fafc", borderRadius: "8px", border: "1px solid #e2e8f0", flexWrap: "wrap", gap: "8px" }}>
+                              <div>
+                                <strong style={{ fontSize: "14px", color: "#0f172a" }}>{d.title}</strong>
+                                <p style={{ margin: "2px 0 0", fontSize: "12px", color: "#64748b" }}>
+                                  Location: {d.location || "On-campus"} &bull; Package: {d.package_lpa || "Best in Industry"}
+                                </p>
+                              </div>
+
+                              <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                                <span style={{ fontSize: "12px", color: "#64748b" }}>
+                                  {d.drive_date ? new Date(d.drive_date).toLocaleDateString() : "Date TBD"}
+                                </span>
+                                <StatusBadge status={d.status} />
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Last Engagement Note */}
+                  {selectedCompany.last_contacted_at && (
+                    <p style={{ marginTop: "16px", fontSize: "12px", color: "#94a3b8", textAlign: "right" }}>
+                      Last Contacted / Updated: {new Date(selectedCompany.last_contacted_at).toLocaleDateString()}
+                    </p>
                   )}
                 </>
               )}
             </div>
+
             <div className="modal-footer">
               <button type="button" className="secondary-button" onClick={() => setModalMode(null)}>
                 Close
@@ -2463,117 +3173,370 @@ export function Recruiters() {
         </div>
       )}
 
-      {/* Add / Edit Modal */}
-      {(modalMode === "add" || modalMode === "edit") && canEdit && (
+      {/* View Recruiter Modal */}
+      {modalMode === "view_recruiter" && selectedRecruiter && (
         <div className="modal-backdrop" onClick={() => setModalMode(null)}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
-              <h2>{modalMode === "edit" ? "Edit Recruiter" : "Add Recruiter"}</h2>
+              <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                <div className="recruiter-avatar-circle" style={{ width: "40px", height: "40px", fontSize: "15px" }}>
+                  {selectedRecruiter.name.slice(0, 2).toUpperCase()}
+                </div>
+                <div>
+                  <h2 style={{ margin: 0, fontSize: "18px" }}>{selectedRecruiter.name}</h2>
+                  <p style={{ margin: 0, fontSize: "12.5px", color: "#64748b" }}>
+                    {selectedRecruiter.designation || "HR Lead"} &bull; {selectedRecruiter.company_name}
+                  </p>
+                </div>
+              </div>
               <button type="button" onClick={() => setModalMode(null)}>×</button>
             </div>
-            <div className="modal-body">
-              <div className="form-group">
-                <label>Company Name *</label>
-                <input
-                  type="text"
-                  value={formData.name}
-                  onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                  placeholder="e.g., Google, Microsoft, Infosys"
-                />
+
+            <div className="modal-body" style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
+                <div className="form-group">
+                  <label><Mail size={13} style={{ verticalAlign: "middle", marginRight: "4px" }} />Email Address</label>
+                  <p><a href={`mailto:${selectedRecruiter.email}`} style={{ color: "#2563eb", textDecoration: "none" }}>{selectedRecruiter.email}</a></p>
+                </div>
+
+                <div className="form-group">
+                  <label><Phone size={13} style={{ verticalAlign: "middle", marginRight: "4px" }} />Primary Phone</label>
+                  <p>{selectedRecruiter.phone || "—"}</p>
+                </div>
               </div>
 
-              <div className="form-group">
-                <label>Contact Person</label>
-                <input
-                  type="text"
-                  value={formData.contact_name}
-                  onChange={(e) => setFormData({ ...formData, contact_name: e.target.value })}
-                  placeholder="HR / Campus Recruiter Name"
-                />
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
+                <div className="form-group">
+                  <label><Building2 size={13} style={{ verticalAlign: "middle", marginRight: "4px" }} />Company & Stage</label>
+                  <p>
+                    <strong>{selectedRecruiter.company_name}</strong> &bull;{" "}
+                    <StatusBadge status={selectedRecruiter.company_status || "COLD"} />
+                  </p>
+                </div>
+
+                <div className="form-group">
+                  <label>Contact Status</label>
+                  <p>
+                    <span className="badge" style={{ background: selectedRecruiter.status === "ACTIVE" ? "#dcfce7" : "#f1f5f9", color: selectedRecruiter.status === "ACTIVE" ? "#15803d" : "#64748b" }}>
+                      {selectedRecruiter.status || "ACTIVE"}
+                    </span>
+                  </p>
+                </div>
               </div>
 
-              <div className="form-group">
-                <label>Contact Email</label>
-                <input
-                  type="email"
-                  value={formData.contact_email}
-                  onChange={(e) => setFormData({ ...formData, contact_email: e.target.value })}
-                  placeholder="recruiter@company.com"
-                />
-              </div>
+              {selectedRecruiter.department && (
+                <div className="form-group">
+                  <label>Department / Functional Team</label>
+                  <p>{selectedRecruiter.department}</p>
+                </div>
+              )}
 
-              <div className="form-group">
-                <label>Industry</label>
-                <input
-                  type="text"
-                  value={formData.industry}
-                  onChange={(e) => setFormData({ ...formData, industry: e.target.value })}
-                  placeholder="e.g., Information Technology, Finance, Core"
-                />
-              </div>
-
-              <div className="form-group">
-                <label>Website URL</label>
-                <input
-                  type="text"
-                  value={formData.website}
-                  onChange={(e) => setFormData({ ...formData, website: e.target.value })}
-                  placeholder="https://company.com"
-                />
-              </div>
-
-              <div className="form-group">
-                <label>Engagement Status</label>
-                <select
-                  value={formData.recruiter_status}
-                  onChange={(e) => setFormData({ ...formData, recruiter_status: e.target.value })}
-                >
-                  <option value="COLD">Cold (Initial outreach)</option>
-                  <option value="WARM">Warm (In discussion)</option>
-                  <option value="HOT">Hot (Active recruitment drive)</option>
-                  <option value="DRIVE_COMPLETED">Drive Completed</option>
-                </select>
-              </div>
+              {selectedRecruiter.notes && (
+                <div className="form-group">
+                  <label>Notes & Follow-up History</label>
+                  <div style={{ background: "#f8fafc", padding: "10px 12px", borderRadius: "6px", fontSize: "13px", color: "#475569" }}>
+                    {selectedRecruiter.notes}
+                  </div>
+                </div>
+              )}
             </div>
+
             <div className="modal-footer">
-              <button type="button" className="secondary-button" onClick={() => setModalMode(null)}>
-                Cancel
-              </button>
-              <button type="button" className="primary-button" onClick={handleSaveCompany} disabled={saving}>
-                {saving ? "Saving..." : modalMode === "edit" ? "Save Changes" : "Add Recruiter"}
+              {canEdit && (
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={() => openEditRecruiterModal(selectedRecruiter)}
+                >
+                  <Pencil size={14} /> Edit Contact
+                </button>
+              )}
+              <button type="button" className="primary-button" onClick={() => setModalMode(null)}>
+                Close
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Delete Modal */}
-      {modalMode === "delete" && canEdit && selectedCompany && (
+      {/* Add / Edit Recruiter Modal */}
+      {(modalMode === "add_recruiter" || modalMode === "edit_recruiter") && canEdit && (
         <div className="modal-backdrop" onClick={() => setModalMode(null)}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
-              <h2>Delete Recruiter</h2>
+              <h2>{modalMode === "edit_recruiter" ? "Edit Recruiter Contact" : "Add Recruiter Contact"}</h2>
+              <button type="button" onClick={() => setModalMode(null)}>×</button>
+            </div>
+
+            <form onSubmit={handleSaveRecruiter}>
+              <div className="modal-body" style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                <div className="form-group">
+                  <label>Full Name *</label>
+                  <input
+                    required
+                    type="text"
+                    value={recruiterForm.name}
+                    onChange={(e) => setRecruiterForm({ ...recruiterForm, name: e.target.value })}
+                    placeholder="e.g., Priya Sharma, Rohan Deshmukh"
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label>Company *</label>
+                  {modalMode === "edit_recruiter" ? (
+                    <input type="text" disabled value={recruiterForm.company_name} />
+                  ) : (
+                    <select
+                      required
+                      value={recruiterForm.company_id}
+                      onChange={(e) => {
+                        const targetComp = companiesList.find((c) => String(c.id) === e.target.value);
+                        setRecruiterForm({
+                          ...recruiterForm,
+                          company_id: e.target.value,
+                          company_name: targetComp?.name || "",
+                        });
+                      }}
+                    >
+                      {companiesList.map((comp) => (
+                        <option key={comp.id} value={comp.id}>
+                          {comp.name} ({comp.industry || "General"})
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+
+                <div className="form-row two-col">
+                  <div className="form-group">
+                    <label>Designation *</label>
+                    <input
+                      required
+                      type="text"
+                      value={recruiterForm.designation}
+                      onChange={(e) => setRecruiterForm({ ...recruiterForm, designation: e.target.value })}
+                      placeholder="e.g., Campus HR Lead, Technical Recruiter"
+                    />
+                  </div>
+
+                  <div className="form-group">
+                    <label>Email Address *</label>
+                    <input
+                      required
+                      type="email"
+                      value={recruiterForm.email}
+                      onChange={(e) => setRecruiterForm({ ...recruiterForm, email: e.target.value })}
+                      placeholder="recruiter@company.com"
+                    />
+                  </div>
+                </div>
+
+                <div className="form-row two-col">
+                  <div className="form-group">
+                    <label>Phone Number</label>
+                    <input
+                      type="tel"
+                      value={recruiterForm.phone}
+                      onChange={(e) => setRecruiterForm({ ...recruiterForm, phone: e.target.value })}
+                      placeholder="+91 98765 43210"
+                    />
+                  </div>
+
+                  <div className="form-group">
+                    <label>Status</label>
+                    <select
+                      value={recruiterForm.status}
+                      onChange={(e) => setRecruiterForm({ ...recruiterForm, status: e.target.value })}
+                    >
+                      <option value="ACTIVE">ACTIVE</option>
+                      <option value="INACTIVE">INACTIVE</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="form-group">
+                  <label>Department / Focus Area</label>
+                  <input
+                    type="text"
+                    value={recruiterForm.department}
+                    onChange={(e) => setRecruiterForm({ ...recruiterForm, department: e.target.value })}
+                    placeholder="e.g., Engineering Hiring, University Relations"
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label>Notes / Engagement Details</label>
+                  <textarea
+                    rows={2}
+                    value={recruiterForm.notes}
+                    onChange={(e) => setRecruiterForm({ ...recruiterForm, notes: e.target.value })}
+                    placeholder="Details about recent conversation, hiring dates, or recruitment preferences..."
+                  />
+                </div>
+              </div>
+
+              <div className="modal-footer">
+                <button type="button" className="secondary-button" onClick={() => setModalMode(null)}>
+                  Cancel
+                </button>
+                <button type="submit" className="primary-button" disabled={saving}>
+                  {saving ? "Saving..." : modalMode === "edit_recruiter" ? "Save Changes" : "Add Recruiter"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Recruiter Modal */}
+      {modalMode === "delete_recruiter" && canEdit && selectedRecruiter && (
+        <div className="modal-backdrop" onClick={() => setModalMode(null)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2>Delete Recruiter Contact</h2>
               <button type="button" onClick={() => setModalMode(null)}>×</button>
             </div>
             <div className="modal-body">
               <p>
-                Are you sure you want to delete <strong>{selectedCompany.name}</strong>?
+                Are you sure you want to delete recruiter contact <strong>{selectedRecruiter.name}</strong> ({selectedRecruiter.company_name})?
               </p>
               <p style={{ color: "#ef4444", marginTop: "8px", fontSize: "13px" }}>
-                This will delete the company profile and its associated recruitment data.
+                This will remove the contact from the recruiter directory. Company records will be preserved safely.
               </p>
             </div>
             <div className="modal-footer">
               <button type="button" className="secondary-button" onClick={() => setModalMode(null)}>
                 Cancel
               </button>
-              <button type="button" className="primary-button" style={{ background: "#ef4444" }} onClick={handleDeleteCompany} disabled={saving}>
+              <button
+                type="button"
+                className="primary-button"
+                style={{ background: "#ef4444" }}
+                onClick={handleDeleteRecruiter}
+                disabled={saving}
+              >
                 {saving ? "Deleting..." : "Delete Recruiter"}
               </button>
             </div>
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// Sub-component for individual Company Cards in the 4 Stage Sections
+function CompanyCard({ company, canEdit, isUpdating, onStatusChange, onViewCompany, onAddRecruiter }) {
+  const isCompleted = ["DRIVE_COMPLETED", "DRIVE COMPLETED"].includes(company.recruiter_status);
+
+  return (
+    <div className="company-card">
+      {/* Top row: Logo, Name, Industry, Website link */}
+      <div className="company-card-top">
+        <div
+          className="company-logo-container"
+          style={{ background: getCompanyLogoGradient(company.name) }}
+        >
+          {company.logo_url ? (
+            <img src={company.logo_url} alt={company.name} className="company-logo-img" />
+          ) : (
+            getCompanyInitials(company.name)
+          )}
+        </div>
+
+        <div className="company-card-meta">
+          <h4>{company.name}</h4>
+          <p>{company.industry || "Enterprise Partner"}</p>
+          {company.website && (
+            <a
+              href={company.website.startsWith("http") ? company.website : `https://${company.website}`}
+              target="_blank"
+              rel="noreferrer"
+              style={{ fontSize: "11.5px", color: "#2563eb", textDecoration: "none", display: "inline-flex", alignItems: "center", gap: "3px", marginTop: "2px" }}
+            >
+              <Globe size={11} /> {company.website.replace(/^https?:\/\//, "").replace(/\/$/, "")}
+            </a>
+          )}
+        </div>
+      </div>
+
+      {/* Contact person details */}
+      <div className="company-card-contact">
+        <div className="contact-person-name">
+          <span>{company.primary_contact || company.contact_name || "Campus Hiring Team"}</span>
+          <span className="badge" style={{ fontSize: "10.5px", background: "#e2e8f0", color: "#334155" }}>
+            {company.recruiter_count ? `${company.recruiter_count} Contact${company.recruiter_count > 1 ? "s" : ""}` : "1 Contact"}
+          </span>
+        </div>
+
+        <div className="contact-links">
+          {company.primary_email || company.contact_email ? (
+            <a href={`mailto:${company.primary_email || company.contact_email}`}>
+              <Mail size={12} /> {company.primary_email || company.contact_email}
+            </a>
+          ) : (
+            <span>No email listed</span>
+          )}
+
+          {(company.primary_phone || company.contact_phone) && (
+            <a href={`tel:${company.primary_phone || company.contact_phone}`}>
+              <Phone size={12} /> {company.primary_phone || company.contact_phone}
+            </a>
+          )}
+        </div>
+      </div>
+
+      {/* Placement Drives & Drive Completed Outcomes */}
+      <div className="company-card-stats">
+        <div>
+          <span style={{ fontWeight: 600, color: "#0f172a" }}>Drives: {company.total_drives ?? 0}</span>
+          {company.latest_drive_title && (
+            <div style={{ fontSize: "11px", color: "#64748b", marginTop: "2px" }}>
+              Latest: <strong>{company.latest_drive_title}</strong> ({company.latest_drive_status || "OPEN"})
+            </div>
+          )}
+          {isCompleted && (company.applicants_count > 0 || company.selected_count > 0) && (
+            <div style={{ fontSize: "11px", color: "#15803d", fontWeight: 600, marginTop: "2px" }}>
+              🎯 {company.applicants_count} Applied &bull; {company.selected_count} Selected
+            </div>
+          )}
+        </div>
+
+        {/* Interactive Status Selector Dropdown */}
+        <div>
+          {canEdit ? (
+            <select
+              className={`company-status-dropdown status-${(company.recruiter_status || "COLD").toLowerCase().replace("_", "-")}`}
+              value={company.recruiter_status || "COLD"}
+              disabled={isUpdating}
+              onChange={(e) => onStatusChange(company.id, e.target.value)}
+              title="Change relationship stage"
+            >
+              <option value="HOT">HOT</option>
+              <option value="WARM">WARM</option>
+              <option value="COLD">COLD</option>
+              <option value="DRIVE_COMPLETED">COMPLETED</option>
+            </select>
+          ) : (
+            <StatusBadge status={company.recruiter_status || "COLD"} />
+          )}
+        </div>
+      </div>
+
+      {/* Footer: Last contacted & View Company Button */}
+      <div className="company-card-footer">
+        <span className="last-contacted-text">
+          {company.last_contacted_at ? `Contact: ${new Date(company.last_contacted_at).toLocaleDateString()}` : "Recent"}
+        </span>
+
+        <button
+          type="button"
+          className="company-view-btn"
+          onClick={() => onViewCompany(company)}
+        >
+          <Eye size={13} /> View Company
+        </button>
+      </div>
     </div>
   );
 }
