@@ -107,6 +107,7 @@ export default function App() {
         <Route path="/students" element={<StudentsPage />} />
         <Route path="/placement-team" element={<PlacementTeamPage />} />
         <Route path="/recruiters" element={<RecruitersPage />} />
+        <Route path="/companies" element={<RecruitersPage />} />
         <Route path="/drives" element={<DrivesPage />} />
         <Route path="/applications" element={<ApplicationsPage />} />
         <Route path="/reports" element={<ReportsPage />} />

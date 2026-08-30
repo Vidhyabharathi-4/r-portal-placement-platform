@@ -23,7 +23,7 @@ const navigation = [
   ["/dashboard", LayoutDashboard, "Overview"],
   ["/students", UsersRound, "Students"],
   ["/placement-team", UserRoundCog, "Placement Team"],
-  ["/recruiters", Building2, "Recruiters"],
+  ["/companies", Building2, "Companies"],
   ["/drives", BriefcaseBusiness, "Placement Drives"],
   ["/applications", ClipboardList, "Applications"],
   ["/reports", FileBarChart2, "Reports"],
@@ -48,6 +48,10 @@ const titles = {
   "/recruiters": [
     "Recruiters",
     "Company relationships and recruitment momentum",
+  ],
+  "/companies": [
+    "Companies",
+    "Company management, recruiters, drives and placement tracking",
   ],
   "/drives": [
     "Placement Drives",

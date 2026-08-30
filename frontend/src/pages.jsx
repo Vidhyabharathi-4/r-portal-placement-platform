@@ -49,6 +49,11 @@ import {
 import ExportPrintModal from "./components/ExportPrintModal";
 import StudentImportModal from "./components/StudentImportModal";
 import RecruiterImportModal from "./components/RecruiterImportModal";
+import AddCompanyModal from "./components/AddCompanyModal";
+import CompanyDetailsModal from "./components/CompanyDetailsModal";
+import ATSMatchModal from "./components/ATSMatchModal";
+import JDUploadModal from "./components/JDUploadModal";
+import AddDriveModal from "./components/AddDriveModal";
 
 const API_BASE = (import.meta.env.VITE_API_URL || (import.meta.env.PROD ? "" : "http://localhost:8000")).replace(/\/$/, "");
 const API = API_BASE;
@@ -2110,12 +2115,30 @@ export function Recruiters() {
   const [showImportModal, setShowImportModal] = useState(false);
   const [showExportModal, setShowExportModal] = useState(false);
 
-  const [modalMode, setModalMode] = useState(null); // "view_company", "view_recruiter", "add_recruiter", "edit_recruiter", "delete_recruiter"
+  // Central 8-tab Company Profile Modal State
+  const [isCompanyProfileOpen, setIsCompanyProfileOpen] = useState(false);
+  const [profileCompanyId, setProfileCompanyId] = useState(null);
+
+  // Add / Edit Company Modal State
+  const [isAddCompanyOpen, setIsAddCompanyOpen] = useState(false);
+  const [companyToEdit, setCompanyToEdit] = useState(null);
+
+  // ATS Matching & JD Upload Modals State
+  const [atsModalDrive, setAtsModalDrive] = useState(null);
+  const [jdUploadDrive, setJdUploadDrive] = useState(null);
+  const [isAddDriveOpen, setIsAddDriveOpen] = useState(false);
+  const [driveCompanyId, setDriveCompanyId] = useState(null);
+  const [industryFilter, setIndustryFilter] = useState("ALL");
+  const [locationFilter, setLocationFilter] = useState("ALL");
+  const [recruiterAvailabilityFilter, setRecruiterAvailabilityFilter] = useState("ALL");
+  const [driveStatusFilter, setDriveStatusFilter] = useState("ALL");
+
+  const [modalMode, setModalMode] = useState(null); // "view_recruiter", "add_recruiter", "edit_recruiter", "delete_recruiter"
   const [selectedCompany, setSelectedCompany] = useState(null);
   const [selectedRecruiter, setSelectedRecruiter] = useState(null);
   const [companyDetails, setCompanyDetails] = useState(null);
   const [detailsLoading, setDetailsLoading] = useState(false);
-  const [companyModalTab, setCompanyModalTab] = useState("contacts"); // "contacts" or "drives"
+  const [companyModalTab, setCompanyModalTab] = useState("contacts");
 
   const [recruiterForm, setRecruiterForm] = useState({
     name: "",
@@ -2203,19 +2226,14 @@ export function Recruiters() {
     }
   }
 
-  async function openCompanyDetails(company) {
-    setSelectedCompany(company);
-    setCompanyModalTab("contacts");
-    setModalMode("view_company");
-    setDetailsLoading(true);
-    try {
-      const details = await api(`/api/companies/${company.id}/details`);
-      setCompanyDetails(details);
-    } catch {
-      setCompanyDetails(company);
-    } finally {
-      setDetailsLoading(false);
-    }
+  function openCompanyDetails(company) {
+    setProfileCompanyId(company.id);
+    setIsCompanyProfileOpen(true);
+  }
+
+  function openAddCompanyModal(company = null) {
+    setCompanyToEdit(company);
+    setIsAddCompanyOpen(true);
   }
 
   function openRecruiterDetails(recruiter) {
@@ -2351,6 +2369,14 @@ export function Recruiters() {
     };
   }, [overview, companiesList, recruitersList]);
 
+  const industriesList = useMemo(() => {
+    return [...new Set(companiesList.map((c) => c.industry).filter(Boolean))].sort();
+  }, [companiesList]);
+
+  const locationsList = useMemo(() => {
+    return [...new Set(companiesList.map((c) => c.location).filter(Boolean))].sort();
+  }, [companiesList]);
+
   // Filtered companies for Stage Cards
   const filteredCompanies = useMemo(() => {
     const q = search.toLowerCase().trim();
@@ -2359,20 +2385,37 @@ export function Recruiters() {
         !q ||
         c.name.toLowerCase().includes(q) ||
         (c.industry && c.industry.toLowerCase().includes(q)) ||
+        (c.location && c.location.toLowerCase().includes(q)) ||
         (c.primary_contact && c.primary_contact.toLowerCase().includes(q)) ||
         (c.primary_email && c.primary_email.toLowerCase().includes(q)) ||
         (c.primary_phone && c.primary_phone.toLowerCase().includes(q));
 
       const matchesStage = activeStageTab === "ALL" || c.recruiter_status === activeStageTab;
+      
+      const matchesIndustry = industryFilter === "ALL" || c.industry === industryFilter;
+      const matchesLocation = locationFilter === "ALL" || c.location === locationFilter;
+      
+      const hasRecruiters = recruitersList.some((r) => r.company_id === c.id);
+      const matchesRecruiterAvailability =
+        recruiterAvailabilityFilter === "ALL" ||
+        (recruiterAvailabilityFilter === "WITH_RECRUITERS" && hasRecruiters) ||
+        (recruiterAvailabilityFilter === "NO_RECRUITERS" && !hasRecruiters);
+        
+      const matchesDriveStatus =
+        driveStatusFilter === "ALL" ||
+        (c.latest_drive_status && String(c.latest_drive_status).toUpperCase() === driveStatusFilter.toUpperCase());
+
       const matchesCompany = companyFilter === "ALL" || String(c.id) === String(companyFilter);
       const matchesDrives =
         driveFilter === "ALL" ||
         (driveFilter === "WITH_DRIVES" && c.total_drives > 0) ||
         (driveFilter === "NO_DRIVES" && c.total_drives === 0);
 
-      return matchesSearch && matchesStage && matchesCompany && matchesDrives;
+      return matchesSearch && matchesStage && matchesCompany && matchesDrives && matchesIndustry && matchesLocation && matchesRecruiterAvailability && matchesDriveStatus;
     });
-  }, [companiesList, search, activeStageTab, companyFilter, driveFilter]);
+  }, [companiesList, recruitersList, search, activeStageTab, companyFilter, driveFilter, industryFilter, locationFilter, recruiterAvailabilityFilter, driveStatusFilter]);
+
+
 
   // Stage categorizations
   const hotCompanies = filteredCompanies.filter((c) => c.recruiter_status === "HOT");
@@ -2451,8 +2494,8 @@ export function Recruiters() {
       <div className="page-heading">
         <div>
           <span className="eyebrow">COMPANY RELATIONSHIP & RECRUITMENT PIPELINE</span>
-          <h1>Recruiters</h1>
-          <p>Manage company recruitment contacts and engagement</p>
+          <h1>Companies</h1>
+          <p>Manage company partners, engagement stages, and campus hiring coordinates</p>
         </div>
 
         <div className="page-heading-actions">
@@ -2469,6 +2512,13 @@ export function Recruiters() {
           </button>
 
           {canEdit && (
+            <button className="secondary-button" type="button" onClick={() => openAddCompanyModal()}>
+              <Building2 size={16} />
+              Add Company
+            </button>
+          )}
+
+          {canEdit && (
             <button className="primary-button" type="button" onClick={() => openAddRecruiterModal()}>
               <Plus size={17} />
               Add Recruiter
@@ -2478,43 +2528,54 @@ export function Recruiters() {
       </div>
 
       {/* 2. SUMMARY CARDS */}
-      <div className="stats-grid">
-        <div style={{ cursor: "pointer" }} onClick={() => { setActiveStageTab("ALL"); setRecruiterStatusFilter("ALL"); setCompanyFilter("ALL"); }}>
-          <StatCard
-            icon={Users}
-            title="Total Recruiters"
-            value={stats.totalRecruiters}
-            subtitle="Campus talent coordinators"
-          />
-        </div>
-
-        <div style={{ cursor: "pointer" }} onClick={() => setRecruiterStatusFilter(recruiterStatusFilter === "ACTIVE" ? "ALL" : "ACTIVE")}>
-          <StatCard
-            icon={UserCheck}
-            title="Active Recruiters"
-            value={stats.activeRecruiters}
-            subtitle={recruiterStatusFilter === "ACTIVE" ? "Filtered: Active only" : "Click to filter active"}
-            tone="blue"
-          />
-        </div>
-
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: "16px", marginBottom: "16px" }}>
         <div style={{ cursor: "pointer" }} onClick={() => { setActiveStageTab("ALL"); setCompanyFilter("ALL"); }}>
           <StatCard
             icon={Building2}
-            title="Companies Connected"
+            title="Total Companies"
             value={stats.connectedCompanies}
-            subtitle="Registered recruitment partners"
-            tone="purple"
+            subtitle="Registered partners"
+            tone={activeStageTab === "ALL" ? "blue" : ""}
           />
         </div>
 
-        <div style={{ cursor: "pointer" }} onClick={() => setDriveFilter(driveFilter === "WITH_DRIVES" ? "ALL" : "WITH_DRIVES")}>
+        <div style={{ cursor: "pointer" }} onClick={() => { setActiveStageTab("COLD"); setCompanyFilter("ALL"); }}>
           <StatCard
-            icon={BriefcaseBusiness}
-            title="Placement Drives"
-            value={`${stats.activeDrives} / ${stats.placementDrives}`}
-            subtitle="Active / Total drives scheduled"
-            tone="green"
+            icon={Activity}
+            title="Cold"
+            value={stats.cold}
+            subtitle="Initial outreach"
+            tone={activeStageTab === "COLD" ? "blue" : ""}
+          />
+        </div>
+
+        <div style={{ cursor: "pointer" }} onClick={() => { setActiveStageTab("WARM"); setCompanyFilter("ALL"); }}>
+          <StatCard
+            icon={TrendingUp}
+            title="Warm"
+            value={stats.warm}
+            subtitle="Engaged / Discussion"
+            tone={activeStageTab === "WARM" ? "purple" : ""}
+          />
+        </div>
+
+        <div style={{ cursor: "pointer" }} onClick={() => { setActiveStageTab("HOT"); setCompanyFilter("ALL"); }}>
+          <StatCard
+            icon={Zap}
+            title="Hot"
+            value={stats.hot}
+            subtitle="Active recruiting"
+            tone={activeStageTab === "HOT" ? "orange" : ""}
+          />
+        </div>
+
+        <div style={{ cursor: "pointer" }} onClick={() => { setActiveStageTab("DRIVE_COMPLETED"); setCompanyFilter("ALL"); }}>
+          <StatCard
+            icon={CheckCircle2}
+            title="Drive Completed"
+            value={stats.driveCompleted}
+            subtitle="Completed pipeline"
+            tone={activeStageTab === "DRIVE_COMPLETED" ? "green" : ""}
           />
         </div>
       </div>
@@ -2567,12 +2628,99 @@ export function Recruiters() {
         </button>
       </div>
 
-      {/* Visual Pipeline Ratio Bar */}
+      {/* Visual Pipeline Ratio Bar (Interactive Engagement Chart) */}
       <div className="pipeline-distribution-bar" title={`Hot: ${stats.hot} | Warm: ${stats.warm} | Cold: ${stats.cold} | Completed: ${stats.driveCompleted}`}>
-        <div className="distribution-segment hot" style={{ width: `${hotPct}%` }} />
-        <div className="distribution-segment warm" style={{ width: `${warmPct}%` }} />
-        <div className="distribution-segment cold" style={{ width: `${coldPct}%` }} />
-        <div className="distribution-segment completed" style={{ width: `${compPct}%` }} />
+        <div className="distribution-segment hot" style={{ width: `${hotPct}%`, cursor: "pointer" }} onClick={() => setActiveStageTab("HOT")} />
+        <div className="distribution-segment warm" style={{ width: `${warmPct}%`, cursor: "pointer" }} onClick={() => setActiveStageTab("WARM")} />
+        <div className="distribution-segment cold" style={{ width: `${coldPct}%`, cursor: "pointer" }} onClick={() => setActiveStageTab("COLD")} />
+        <div className="distribution-segment completed" style={{ width: `${compPct}%`, cursor: "pointer" }} onClick={() => setActiveStageTab("DRIVE_COMPLETED")} />
+      </div>
+
+      {/* COMPANIES SEARCH AND FILTER TOOLBAR */}
+      <div className="toolbar" style={{ margin: "16px 0" }}>
+        <div className="search-box" style={{ flex: 1 }}>
+          <Search size={18} />
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search company name, industry, recruiter or coordinates..."
+          />
+        </div>
+
+        <div className="toolbar-filters" style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
+          {/* Industry Filter */}
+          <div className="select-box">
+            <select value={industryFilter} onChange={(e) => setIndustryFilter(e.target.value)}>
+              <option value="ALL">All Industries ({industriesList.length})</option>
+              {industriesList.map((ind) => (
+                <option key={ind} value={ind}>{ind}</option>
+              ))}
+            </select>
+            <ChevronDown size={15} />
+          </div>
+
+          {/* Location Filter */}
+          <div className="select-box">
+            <select value={locationFilter} onChange={(e) => setLocationFilter(e.target.value)}>
+              <option value="ALL">All Locations ({locationsList.length})</option>
+              {locationsList.map((loc) => (
+                <option key={loc} value={loc}>{loc}</option>
+              ))}
+            </select>
+            <ChevronDown size={15} />
+          </div>
+
+          {/* Recruiter Availability Filter */}
+          <div className="select-box">
+            <select value={recruiterAvailabilityFilter} onChange={(e) => setRecruiterAvailabilityFilter(e.target.value)}>
+              <option value="ALL">All Recruiter Status</option>
+              <option value="WITH_RECRUITERS">With Recruiters</option>
+              <option value="NO_RECRUITERS">No Recruiters</option>
+            </select>
+            <ChevronDown size={15} />
+          </div>
+
+          {/* Drive Status Filter */}
+          <div className="select-box">
+            <select value={driveStatusFilter} onChange={(e) => setDriveStatusFilter(e.target.value)}>
+              <option value="ALL">All Drive Status</option>
+              <option value="OPEN">Open / Active Drives</option>
+              <option value="CLOSED">Closed Drives</option>
+              <option value="DRAFT">Draft Drives</option>
+            </select>
+            <ChevronDown size={15} />
+          </div>
+
+          {/* Status Filter */}
+          <div className="select-box">
+            <select value={activeStageTab} onChange={(e) => setActiveStageTab(e.target.value)}>
+              <option value="ALL">All Stages</option>
+              <option value="HOT">HOT</option>
+              <option value="WARM">WARM</option>
+              <option value="COLD">COLD</option>
+              <option value="DRIVE_COMPLETED">DRIVE COMPLETED</option>
+            </select>
+            <ChevronDown size={15} />
+          </div>
+
+          {(search || industryFilter !== "ALL" || locationFilter !== "ALL" || recruiterAvailabilityFilter !== "ALL" || driveStatusFilter !== "ALL" || activeStageTab !== "ALL") && (
+            <button
+              className="secondary-button small-button"
+              type="button"
+              onClick={() => {
+                setSearch("");
+                setIndustryFilter("ALL");
+                setLocationFilter("ALL");
+                setRecruiterAvailabilityFilter("ALL");
+                setDriveStatusFilter("ALL");
+                setActiveStageTab("ALL");
+              }}
+            >
+              <RotateCcw size={14} />
+              Reset Filters
+            </button>
+          )}
+        </div>
       </div>
 
       {/* 4. COMPANY ENGAGEMENT STAGE SECTIONS */}
@@ -2965,213 +3113,101 @@ export function Recruiters() {
         filtersSummary={`Stage: ${activeStageTab} | Recruiter Status: ${recruiterStatusFilter} | Company: ${companyFilter === "ALL" ? "All" : companyFilter}`}
       />
 
-      {/* View Company Modal */}
-      {modalMode === "view_company" && selectedCompany && (
-        <div className="modal-backdrop" onClick={() => setModalMode(null)}>
-          <div className="modal modal-wide" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-                <div
-                  className="company-logo-container"
-                  style={{
-                    width: "44px",
-                    height: "44px",
-                    background: getCompanyLogoGradient(selectedCompany.name),
-                    borderRadius: "10px",
-                  }}
-                >
-                  {selectedCompany.logo_url ? (
-                    <img src={selectedCompany.logo_url} alt={selectedCompany.name} className="company-logo-img" />
-                  ) : (
-                    getCompanyInitials(selectedCompany.name)
-                  )}
-                </div>
-                <div>
-                  <h2 style={{ margin: 0, fontSize: "18px" }}>{selectedCompany.name}</h2>
-                  <p style={{ margin: 0, fontSize: "12.5px", color: "#64748b" }}>
-                    {selectedCompany.industry || "Enterprise Partner"} &bull; Relationship Stage:{" "}
-                    <StatusBadge status={selectedCompany.recruiter_status} />
-                  </p>
-                </div>
-              </div>
-              <button type="button" onClick={() => setModalMode(null)}>×</button>
-            </div>
+      {/* Central 8-Tab Company Profile Modal */}
+      <CompanyDetailsModal
+        isOpen={isCompanyProfileOpen}
+        onClose={() => {
+          setIsCompanyProfileOpen(false);
+          setProfileCompanyId(null);
+        }}
+        companyId={profileCompanyId}
+        canEdit={canEdit}
+        onStatusChange={handleCompanyStatusChange}
+        onEditCompany={(comp) => {
+          setIsCompanyProfileOpen(false);
+          openAddCompanyModal(comp);
+        }}
+        onAddRecruiter={(compId) => {
+          setIsCompanyProfileOpen(false);
+          openAddRecruiterModal(compId);
+        }}
+        onCreateDrive={(compId) => {
+          setIsCompanyProfileOpen(false);
+          setDriveCompanyId(compId || profileCompanyId);
+          setIsAddDriveOpen(true);
+        }}
+        onOpenATS={(driveId, driveTitle, compName) => {
+          setAtsModalDrive({ id: driveId, title: driveTitle, companyName: compName });
+        }}
+        onOpenJDUpload={(driveId, driveTitle) => {
+          setJdUploadDrive({ id: driveId, title: driveTitle });
+        }}
+        onViewRecruiter={(rec) => openRecruiterDetails(rec)}
+        onEditRecruiter={(rec) => openEditRecruiterModal(rec)}
+      />
 
-            <div className="modal-body">
-              {detailsLoading ? (
-                <LoadingState message="Loading company engagement records…" />
-              ) : (
-                <>
-                  {/* Company Top Bar & Website */}
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: "#f8fafc", padding: "12px 16px", borderRadius: "10px", border: "1px solid #e2e8f0", flexWrap: "wrap", gap: "10px" }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-                      <span style={{ fontSize: "13px", fontWeight: 600, color: "#475569" }}>Update Stage:</span>
-                      {canEdit ? (
-                        <select
-                          className={`company-status-dropdown status-${(selectedCompany.recruiter_status || "COLD").toLowerCase().replace("_", "-")}`}
-                          value={selectedCompany.recruiter_status}
-                          onChange={(e) => {
-                            handleCompanyStatusChange(selectedCompany.id, e.target.value);
-                            setSelectedCompany({ ...selectedCompany, recruiter_status: e.target.value });
-                          }}
-                        >
-                          <option value="HOT">🔥 Hot (Active Recruitment)</option>
-                          <option value="WARM">⚡ Warm (In Discussion)</option>
-                          <option value="COLD">❄️ Cold (Prospect)</option>
-                          <option value="DRIVE_COMPLETED">✅ Drive Completed</option>
-                        </select>
-                      ) : (
-                        <StatusBadge status={selectedCompany.recruiter_status} />
-                      )}
-                    </div>
+      {/* Add / Edit Company Profile Modal */}
+      <AddCompanyModal
+        isOpen={isAddCompanyOpen}
+        onClose={() => {
+          setIsAddCompanyOpen(false);
+          setCompanyToEdit(null);
+        }}
+        companyToEdit={companyToEdit}
+        onSuccess={() => {
+          invalidateCache("/api/recruiters/overview");
+          invalidateCache("/api/companies");
+          loadRecruitersData();
+          showNotification(companyToEdit ? "Company profile updated successfully!" : "New company registered successfully!");
+        }}
+      />
 
-                    {selectedCompany.website && (
-                      <a
-                        href={selectedCompany.website.startsWith("http") ? selectedCompany.website : `https://${selectedCompany.website}`}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="secondary-button small-button"
-                      >
-                        <Globe size={14} />
-                        {selectedCompany.website.replace(/^https?:\/\//, "")}
-                      </a>
-                    )}
-                  </div>
+      {/* Create Placement Drive Modal */}
+      <AddDriveModal
+        isOpen={isAddDriveOpen}
+        onClose={() => {
+          setIsAddDriveOpen(false);
+          setDriveCompanyId(null);
+        }}
+        companyId={driveCompanyId}
+        companies={companiesList}
+        onSuccess={() => {
+          invalidateCache("/api/drives");
+          invalidateCache("/api/recruiters/overview");
+          loadRecruitersData();
+          showNotification("Placement drive created successfully!");
+        }}
+      />
 
-                  {/* 4 Stat Metrics */}
-                  <div className="stats-grid four" style={{ marginTop: "14px" }}>
-                    <StatCard icon={BriefcaseBusiness} title="Total Drives" value={companyDetails?.total_drives ?? 0} />
-                    <StatCard icon={CheckCircle2} title="Active Drives" value={companyDetails?.active_drives ?? 0} tone="blue" />
-                    <StatCard icon={FileText} title="Applications" value={companyDetails?.total_applications ?? 0} />
-                    <StatCard icon={Award} title="Selections / Offers" value={companyDetails?.selected_students ?? 0} tone="green" />
-                  </div>
+      {/* ATS Match Modal */}
+      <ATSMatchModal
+        isOpen={Boolean(atsModalDrive)}
+        onClose={() => setAtsModalDrive(null)}
+        driveId={atsModalDrive?.id}
+        driveTitle={atsModalDrive?.title}
+        companyName={atsModalDrive?.companyName}
+        onCandidateShortlisted={() => {
+          invalidateCache("/api/drives");
+          invalidateCache("/api/applications");
+          invalidateCache("/api/recruiters/overview");
+          if (profileCompanyId) {
+            // refresh
+          }
+        }}
+      />
 
-                  {/* Tabs: Contacts vs Drives */}
-                  <div style={{ display: "flex", gap: "8px", borderBottom: "1px solid #e2e8f0", marginTop: "18px", paddingBottom: "8px" }}>
-                    <button
-                      type="button"
-                      className={`secondary-button small-button ${companyModalTab === "contacts" ? "primary-button" : ""}`}
-                      onClick={() => setCompanyModalTab("contacts")}
-                    >
-                      <Users size={14} />
-                      Recruiter Contacts ({companyDetails?.recruiters?.length ?? 0})
-                    </button>
-
-                    <button
-                      type="button"
-                      className={`secondary-button small-button ${companyModalTab === "drives" ? "primary-button" : ""}`}
-                      onClick={() => setCompanyModalTab("drives")}
-                    >
-                      <BriefcaseBusiness size={14} />
-                      Placement Drives ({companyDetails?.drives?.length ?? 0})
-                    </button>
-
-                    {canEdit && (
-                      <button
-                        type="button"
-                        className="secondary-button small-button"
-                        style={{ marginLeft: "auto" }}
-                        onClick={() => openAddRecruiterModal(selectedCompany.id)}
-                      >
-                        <Plus size={14} /> Add Recruiter to {selectedCompany.name}
-                      </button>
-                    )}
-                  </div>
-
-                  {/* Contacts Tab Content */}
-                  {companyModalTab === "contacts" && (
-                    <div style={{ marginTop: "12px" }}>
-                      {!companyDetails?.recruiters || companyDetails.recruiters.length === 0 ? (
-                        <div style={{ padding: "20px", textAlign: "center", color: "#64748b", background: "#f8fafc", borderRadius: "8px", fontSize: "13px" }}>
-                          No recruiter contacts recorded for this company yet.
-                        </div>
-                      ) : (
-                        <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
-                          {companyDetails.recruiters.map((rec) => (
-                            <div key={rec.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 14px", background: "#f8fafc", borderRadius: "8px", border: "1px solid #e2e8f0", flexWrap: "wrap", gap: "10px" }}>
-                              <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-                                <div className="recruiter-avatar-circle">
-                                  {rec.name.slice(0, 2).toUpperCase()}
-                                </div>
-                                <div>
-                                  <strong style={{ fontSize: "13.5px", color: "#0f172a" }}>{rec.name}</strong>
-                                  <p style={{ margin: "2px 0 0", fontSize: "12px", color: "#64748b" }}>
-                                    {rec.designation || "HR Lead"} &bull; {rec.department || "Talent Acquisition"}
-                                  </p>
-                                </div>
-                              </div>
-
-                              <div style={{ display: "flex", alignItems: "center", gap: "16px", fontSize: "12.5px" }}>
-                                {rec.email && (
-                                  <a href={`mailto:${rec.email}`} style={{ color: "#2563eb", textDecoration: "none", display: "flex", alignItems: "center", gap: "4px" }}>
-                                    <Mail size={13} /> {rec.email}
-                                  </a>
-                                )}
-                                {rec.phone && (
-                                  <a href={`tel:${rec.phone}`} style={{ color: "#475569", textDecoration: "none", display: "flex", alignItems: "center", gap: "4px" }}>
-                                    <Phone size={13} /> {rec.phone}
-                                  </a>
-                                )}
-                                <span className="badge" style={{ background: rec.status === "ACTIVE" ? "#dcfce7" : "#f1f5f9", color: rec.status === "ACTIVE" ? "#15803d" : "#64748b" }}>
-                                  {rec.status}
-                                </span>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  {/* Drives Tab Content */}
-                  {companyModalTab === "drives" && (
-                    <div style={{ marginTop: "12px" }}>
-                      {!companyDetails?.drives || companyDetails.drives.length === 0 ? (
-                        <div style={{ padding: "20px", textAlign: "center", color: "#64748b", background: "#f8fafc", borderRadius: "8px", fontSize: "13px" }}>
-                          No placement drives scheduled for this company yet.
-                        </div>
-                      ) : (
-                        <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
-                          {companyDetails.drives.map((d) => (
-                            <div key={d.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 14px", background: "#f8fafc", borderRadius: "8px", border: "1px solid #e2e8f0", flexWrap: "wrap", gap: "8px" }}>
-                              <div>
-                                <strong style={{ fontSize: "14px", color: "#0f172a" }}>{d.title}</strong>
-                                <p style={{ margin: "2px 0 0", fontSize: "12px", color: "#64748b" }}>
-                                  Location: {d.location || "On-campus"} &bull; Package: {d.package_lpa || "Best in Industry"}
-                                </p>
-                              </div>
-
-                              <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-                                <span style={{ fontSize: "12px", color: "#64748b" }}>
-                                  {d.drive_date ? new Date(d.drive_date).toLocaleDateString() : "Date TBD"}
-                                </span>
-                                <StatusBadge status={d.status} />
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  {/* Last Engagement Note */}
-                  {selectedCompany.last_contacted_at && (
-                    <p style={{ marginTop: "16px", fontSize: "12px", color: "#94a3b8", textAlign: "right" }}>
-                      Last Contacted / Updated: {new Date(selectedCompany.last_contacted_at).toLocaleDateString()}
-                    </p>
-                  )}
-                </>
-              )}
-            </div>
-
-            <div className="modal-footer">
-              <button type="button" className="secondary-button" onClick={() => setModalMode(null)}>
-                Close
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* JD Upload Modal */}
+      <JDUploadModal
+        isOpen={Boolean(jdUploadDrive)}
+        onClose={() => setJdUploadDrive(null)}
+        driveId={jdUploadDrive?.id}
+        driveTitle={jdUploadDrive?.title}
+        onSuccess={() => {
+          invalidateCache("/api/drives");
+          invalidateCache("/api/recruiters/overview");
+          showNotification("Job description uploaded and parsed successfully!");
+        }}
+      />
 
       {/* View Recruiter Modal */}
       {modalMode === "view_recruiter" && selectedRecruiter && (
@@ -3438,15 +3474,25 @@ function CompanyCard({ company, canEdit, isUpdating, onStatusChange, onViewCompa
           style={{ background: getCompanyLogoGradient(company.name) }}
         >
           {company.logo_url ? (
-            <img src={company.logo_url} alt={company.name} className="company-logo-img" />
+            <img
+              src={company.logo_url}
+              alt={company.name}
+              className="company-logo-img"
+              onError={(e) => {
+                e.target.style.display = 'none';
+                const fallback = document.createElement('span');
+                fallback.innerText = getCompanyInitials(company.name);
+                e.target.parentNode.appendChild(fallback);
+              }}
+            />
           ) : (
-            getCompanyInitials(company.name)
+            <span>{getCompanyInitials(company.name)}</span>
           )}
         </div>
 
         <div className="company-card-meta">
           <h4>{company.name}</h4>
-          <p>{company.industry || "Enterprise Partner"}</p>
+          <p>{company.industry || "Enterprise Partner"} &bull; {company.location || "India"}</p>
           {company.website && (
             <a
               href={company.website.startsWith("http") ? company.website : `https://${company.website}`}
@@ -3554,19 +3600,38 @@ export function Drives() {
   const [sort, setSort] = useState({ key: "title", direction: "asc" });
   const [loading, setLoading] = useState(() => !(getCached("/api/drives")?.length > 0));
   const [error, setError] = useState("");
+  const [notification, setNotification] = useState(null);
   const [showExportModal, setShowExportModal] = useState(false);
+
+  // ATS Matching & JD Upload Modals
+  const [atsModalDrive, setAtsModalDrive] = useState(null);
+  const [jdUploadDrive, setJdUploadDrive] = useState(null);
 
   const [modalMode, setModalMode] = useState(null); // "add", "edit", "view"
   const [selectedDrive, setSelectedDrive] = useState(null);
   const [formData, setFormData] = useState({
     title: "",
     company_id: "",
-    location: "",
-    package_lpa: "",
-    eligibility: "",
+    job_role: "",
+    location: "Campus",
+    package_lpa: "6.0 LPA",
+    min_cgpa: "6.0",
+    max_backlogs: 0,
+    required_skills: "",
+    preferred_skills: "",
+    departments: "CSE, IT, ECE, AIDS",
+    experience_requirement: "Fresher / Final Year (2026 Batch)",
+    certifications: "",
+    eligibility: "B.E / B.Tech all eligible streams with CGPA >= 6.0",
+    description: "",
     status: "OPEN",
     work_mode: "On-site",
   });
+
+  const showToast = (message, tone = "success") => {
+    setNotification({ message, tone });
+    setTimeout(() => setNotification(null), 4000);
+  };
 
   async function loadDrives() {
     try {
@@ -3577,8 +3642,11 @@ export function Drives() {
       ]);
       setDrives(Array.isArray(driveList) ? driveList : []);
       setCompanies(Array.isArray(compList) ? compList : []);
+      setCached("/api/drives", driveList);
+      setCached("/api/companies", compList);
     } catch (err) {
       if (!drives.length) setError(err.message);
+      showToast(err.message, "error");
     } finally {
       setLoading(false);
     }
@@ -3600,10 +3668,12 @@ export function Drives() {
 
     let list = drives.filter((drive) => {
       const title = String(drive.title || "").toLowerCase();
+      const role = String(drive.job_role || "").toLowerCase();
       const comp = String(drive.company?.name || "").toLowerCase();
       const loc = String(drive.location || "").toLowerCase();
+      const skills = String(drive.required_skills || "").toLowerCase();
 
-      const matchesSearch = !q || title.includes(q) || comp.includes(q) || loc.includes(q);
+      const matchesSearch = !q || title.includes(q) || role.includes(q) || comp.includes(q) || loc.includes(q) || skills.includes(q);
       const matchesStatus = status === "ALL" || String(drive.status || "").toUpperCase() === status.toUpperCase();
 
       return matchesSearch && matchesStatus;
@@ -3622,46 +3692,67 @@ export function Drives() {
 
   const handleSaveDrive = async () => {
     if (!formData.title.trim() || !formData.company_id || !formData.location.trim()) {
-      alert("Please fill title, company and location.");
+      showToast("Please provide Drive Title, Company, and Location.", "error");
       return;
     }
     try {
+      const payload = {
+        ...formData,
+        company_id: Number(formData.company_id),
+        max_backlogs: Number(formData.max_backlogs) || 0,
+        job_role: formData.job_role || formData.title,
+        eligibility: formData.eligibility || `Min CGPA: ${formData.min_cgpa}, Streams: ${formData.departments}`,
+      };
+
       if (modalMode === "edit" && selectedDrive) {
         await api(`/api/drives/${selectedDrive.id}`, {
           method: "PUT",
-          body: JSON.stringify({ ...formData, company_id: Number(formData.company_id) }),
+          body: JSON.stringify(payload),
         });
+        showToast(`Drive "${formData.title}" updated successfully!`);
       } else {
         await api("/api/drives", {
           method: "POST",
-          body: JSON.stringify({ ...formData, company_id: Number(formData.company_id), eligibility: formData.eligibility || "Eligible students" }),
+          body: JSON.stringify(payload),
         });
+        showToast(`New Placement Drive "${formData.title}" created successfully!`);
       }
       setModalMode(null);
+      invalidateCache("/api/drives");
+      invalidateCache("/api/dashboard");
       await loadDrives();
     } catch (err) {
-      alert("Error: " + err.message);
+      showToast(err.message || "Failed to save placement drive.", "error");
     }
   };
 
   const exportColumns = [
     { key: "title", label: "DRIVE TITLE" },
+    { key: "job_role", label: "JOB ROLE", accessor: (item) => item.job_role || item.title },
     { key: "company", label: "COMPANY", accessor: (item) => item.company?.name || "—" },
     { key: "location", label: "LOCATION" },
     { key: "package_lpa", label: "CTC PACKAGE", accessor: (item) => item.package_lpa || "—" },
+    { key: "min_cgpa", label: "MIN CGPA", accessor: (item) => item.min_cgpa || "6.0" },
+    { key: "required_skills", label: "REQUIRED SKILLS", accessor: (item) => item.required_skills || "—" },
     { key: "status", label: "STATUS", accessor: (item) => item.status || "—" },
   ];
 
-  if (loading) return <LoadingState />;
-  if (error && drives.length === 0) return <ErrorState message={error} />;
+  if (loading && drives.length === 0) return <LoadingState message="Loading placement drives…" />;
+  if (error && drives.length === 0) return <ErrorState message={error} onRetry={loadDrives} />;
 
   return (
     <div className="page">
+      {notification && (
+        <div className={`inline-alert ${notification.tone === "error" ? "error" : "success"}`}>
+          {notification.message}
+        </div>
+      )}
+
       <div className="page-heading">
         <div>
-          <span className="eyebrow">RECRUITMENT DRIVES</span>
+          <span className="eyebrow">RECRUITMENT DRIVES & ATS MATCHING</span>
           <h1>Placement Drives ({drives.length})</h1>
-          <p>Manage upcoming, active, and completed placement drives.</p>
+          <p>Manage upcoming, active, and completed campus drives with smart ATS candidate matching.</p>
         </div>
 
         <div className="page-heading-actions">
@@ -3679,9 +3770,18 @@ export function Drives() {
                 setFormData({
                   title: "",
                   company_id: companies[0]?.id ? String(companies[0].id) : "",
+                  job_role: "",
                   location: "Campus",
                   package_lpa: "6.0 LPA",
-                  eligibility: "All eligible final year students",
+                  min_cgpa: "6.0",
+                  max_backlogs: 0,
+                  required_skills: "Python, Java, SQL, Git",
+                  preferred_skills: "React, Docker, Cloud",
+                  departments: "CSE, IT, ECE, AIDS",
+                  experience_requirement: "Fresher / Final Year (2026 Batch)",
+                  certifications: "",
+                  eligibility: "B.E / B.Tech all eligible streams with CGPA >= 6.0",
+                  description: "",
                   status: "OPEN",
                   work_mode: "On-site",
                 });
@@ -3702,7 +3802,7 @@ export function Drives() {
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search by drive title, company, or location..."
+              placeholder="Search by drive title, role, company, skills, or location..."
             />
           </div>
 
@@ -3743,12 +3843,13 @@ export function Drives() {
             <table className="data-table">
               <thead>
                 <tr>
-                  <SortHeader label="DRIVE TITLE" sortKey="title" currentSort={sort} onSort={handleSort} />
+                  <SortHeader label="DRIVE TITLE & ROLE" sortKey="title" currentSort={sort} onSort={handleSort} />
                   <SortHeader label="COMPANY" sortKey="company" currentSort={sort} onSort={handleSort} />
                   <SortHeader label="LOCATION" sortKey="location" currentSort={sort} onSort={handleSort} />
                   <SortHeader label="PACKAGE" sortKey="package_lpa" currentSort={sort} onSort={handleSort} />
+                  <th>CRITERIA & SKILLS</th>
                   <SortHeader label="STATUS" sortKey="status" currentSort={sort} onSort={handleSort} />
-                  <th>ACTIONS</th>
+                  <th style={{ textAlign: "right" }}>ACTIONS</th>
                 </tr>
               </thead>
 
@@ -3756,16 +3857,78 @@ export function Drives() {
                 {filtered.map((drive, index) => (
                   <tr key={drive.id || index}>
                     <td>
-                      <strong>{drive.title || "—"}</strong>
+                      <strong style={{ fontSize: "14px", color: "#0f172a" }}>{drive.title || "—"}</strong>
+                      <div style={{ fontSize: "12px", color: "#64748b" }}>
+                        Role: {drive.job_role || drive.title} &bull; Mode: {drive.work_mode || "On-site"}
+                      </div>
                     </td>
-                    <td>{drive.company?.name || "—"}</td>
+                    <td>
+                      <span style={{ fontWeight: 600, color: "#1e293b" }}>{drive.company?.name || "—"}</span>
+                      {drive.company?.industry && (
+                        <div style={{ fontSize: "11px", color: "#64748b" }}>{drive.company.industry}</div>
+                      )}
+                    </td>
                     <td>{drive.location || "—"}</td>
-                    <td>{drive.package_lpa || "—"}</td>
+                    <td>
+                      <span className="badge" style={{ background: "#dcfce7", color: "#15803d", fontWeight: 700 }}>
+                        {drive.package_lpa || "—"}
+                      </span>
+                    </td>
+                    <td>
+                      <div style={{ fontSize: "12px", color: "#334155" }}>
+                        <strong>Min CGPA:</strong> {drive.min_cgpa || "6.0"}
+                      </div>
+                      {drive.required_skills && (
+                        <div style={{ fontSize: "11px", color: "#64748b", maxWidth: "180px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                          {drive.required_skills}
+                        </div>
+                      )}
+                    </td>
                     <td>
                       <StatusBadge status={drive.status || "OPEN"} />
                     </td>
-                    <td>
-                      <div className="table-actions">
+                    <td style={{ textAlign: "right" }}>
+                      <div className="table-actions" style={{ justifyContent: "flex-end", gap: "6px" }}>
+                        {/* ATS MATCH BUTTON */}
+                        <button
+                          type="button"
+                          className="primary-button small-button"
+                          style={{
+                            background: "linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%)",
+                            padding: "4px 10px",
+                            fontSize: "11.5px",
+                            fontWeight: 700,
+                          }}
+                          title="Run ATS Match on Students"
+                          onClick={() => {
+                            setAtsModalDrive({
+                              id: drive.id,
+                              title: drive.title,
+                              companyName: drive.company?.name || "Company",
+                            });
+                          }}
+                        >
+                          <Sparkles size={12} /> ATS Match
+                        </button>
+
+                        {/* Upload JD Button */}
+                        {canEdit && (
+                          <button
+                            type="button"
+                            className="secondary-button small-button"
+                            style={{ padding: "4px 8px", fontSize: "11.5px" }}
+                            title="Upload and Parse JD Document"
+                            onClick={() => {
+                              setJdUploadDrive({
+                                id: drive.id,
+                                title: drive.title,
+                              });
+                            }}
+                          >
+                            <FileText size={12} /> JD
+                          </button>
+                        )}
+
                         <button
                           type="button"
                           title="View Details"
@@ -3774,8 +3937,9 @@ export function Drives() {
                             setModalMode("view");
                           }}
                         >
-                          <Eye size={16} />
+                          <Eye size={15} />
                         </button>
+
                         {canEdit && (
                           <button
                             type="button"
@@ -3783,18 +3947,27 @@ export function Drives() {
                             onClick={() => {
                               setSelectedDrive(drive);
                               setFormData({
-                                title: drive.title,
+                                title: drive.title || "",
                                 company_id: String(drive.company_id),
-                                location: drive.location,
+                                job_role: drive.job_role || drive.title || "",
+                                location: drive.location || "Campus",
                                 package_lpa: drive.package_lpa || "",
+                                min_cgpa: drive.min_cgpa || "6.0",
+                                max_backlogs: drive.max_backlogs || 0,
+                                required_skills: drive.required_skills || "",
+                                preferred_skills: drive.preferred_skills || "",
+                                departments: drive.departments || "CSE, IT, ECE, AIDS",
+                                experience_requirement: drive.experience_requirement || "Fresher / Final Year",
+                                certifications: drive.certifications || "",
                                 eligibility: drive.eligibility || "",
+                                description: drive.description || "",
                                 status: drive.status || "OPEN",
                                 work_mode: drive.work_mode || "On-site",
                               });
                               setModalMode("edit");
                             }}
                           >
-                            <Pencil size={16} />
+                            <Pencil size={15} />
                           </button>
                         )}
                       </div>
@@ -3818,41 +3991,109 @@ export function Drives() {
         filtersSummary={`Status: ${status}`}
       />
 
+      {/* ATS Match Modal */}
+      <ATSMatchModal
+        isOpen={Boolean(atsModalDrive)}
+        onClose={() => setAtsModalDrive(null)}
+        driveId={atsModalDrive?.id}
+        driveTitle={atsModalDrive?.title}
+        companyName={atsModalDrive?.companyName}
+        onCandidateShortlisted={() => {
+          invalidateCache("/api/drives");
+          invalidateCache("/api/applications");
+          loadDrives();
+        }}
+      />
+
+      {/* JD Upload Modal */}
+      <JDUploadModal
+        isOpen={Boolean(jdUploadDrive)}
+        onClose={() => setJdUploadDrive(null)}
+        driveId={jdUploadDrive?.id}
+        driveTitle={jdUploadDrive?.title}
+        onSuccess={() => {
+          invalidateCache("/api/drives");
+          loadDrives();
+          showToast("Job description uploaded and parsed successfully!");
+        }}
+      />
+
       {/* View Modal */}
       {modalMode === "view" && selectedDrive && (
         <div className="modal-backdrop" onClick={() => setModalMode(null)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
+          <div className="modal modal-wide" style={{ maxWidth: "680px" }} onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
-              <h2>Placement Drive Information</h2>
+              <div>
+                <h2 style={{ margin: 0, fontSize: "18px" }}>{selectedDrive.title}</h2>
+                <p style={{ margin: 0, fontSize: "12.5px", color: "#64748b" }}>
+                  {selectedDrive.company?.name} &bull; {selectedDrive.location}
+                </p>
+              </div>
               <button type="button" onClick={() => setModalMode(null)}>×</button>
             </div>
-            <div className="modal-body">
-              <div className="form-group">
-                <label>Drive Title</label>
-                <p><strong>{selectedDrive.title}</strong></p>
+
+            <div className="modal-body" style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "10px", textAlign: "center" }}>
+                <div style={{ background: "#f8fafc", padding: "10px", borderRadius: "8px", border: "1px solid #e2e8f0" }}>
+                  <span style={{ fontSize: "11px", color: "#64748b", textTransform: "uppercase", fontWeight: 700 }}>Package CTC</span>
+                  <p style={{ margin: "4px 0 0", fontSize: "16px", fontWeight: 800, color: "#16a34a" }}>{selectedDrive.package_lpa || "—"}</p>
+                </div>
+                <div style={{ background: "#f8fafc", padding: "10px", borderRadius: "8px", border: "1px solid #e2e8f0" }}>
+                  <span style={{ fontSize: "11px", color: "#64748b", textTransform: "uppercase", fontWeight: 700 }}>Min CGPA</span>
+                  <p style={{ margin: "4px 0 0", fontSize: "16px", fontWeight: 800, color: "#2563eb" }}>{selectedDrive.min_cgpa || "6.0"}</p>
+                </div>
+                <div style={{ background: "#f8fafc", padding: "10px", borderRadius: "8px", border: "1px solid #e2e8f0" }}>
+                  <span style={{ fontSize: "11px", color: "#64748b", textTransform: "uppercase", fontWeight: 700 }}>Status</span>
+                  <p style={{ margin: "4px 0 0" }}><StatusBadge status={selectedDrive.status} /></p>
+                </div>
               </div>
+
               <div className="form-group">
-                <label>Company</label>
-                <p>{selectedDrive.company?.name || "—"}</p>
+                <label>Job Role</label>
+                <p><strong>{selectedDrive.job_role || selectedDrive.title}</strong></p>
               </div>
+
               <div className="form-group">
-                <label>Location</label>
-                <p>{selectedDrive.location || "—"}</p>
+                <label>Target Streams / Departments</label>
+                <p>{selectedDrive.departments || "All engineering branches"}</p>
               </div>
+
               <div className="form-group">
-                <label>Package (LPA)</label>
-                <p>{selectedDrive.package_lpa || "—"}</p>
+                <label>Required Technical Skills</label>
+                <p>{selectedDrive.required_skills || "As specified in JD"}</p>
               </div>
+
+              {selectedDrive.preferred_skills && (
+                <div className="form-group">
+                  <label>Preferred Skills</label>
+                  <p>{selectedDrive.preferred_skills}</p>
+                </div>
+              )}
+
               <div className="form-group">
-                <label>Status</label>
-                <p><StatusBadge status={selectedDrive.status} /></p>
-              </div>
-              <div className="form-group">
-                <label>Eligibility Criteria</label>
-                <p>{selectedDrive.eligibility || "Not specified"}</p>
+                <label>Eligibility & Description</label>
+                <p style={{ background: "#f8fafc", padding: "10px 12px", borderRadius: "8px", fontSize: "13px" }}>
+                  {selectedDrive.description || selectedDrive.eligibility || "Standard campus hiring criteria."}
+                </p>
               </div>
             </div>
+
             <div className="modal-footer">
+              <button
+                type="button"
+                className="primary-button"
+                style={{ background: "linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%)" }}
+                onClick={() => {
+                  setModalMode(null);
+                  setAtsModalDrive({
+                    id: selectedDrive.id,
+                    title: selectedDrive.title,
+                    companyName: selectedDrive.company?.name || "Company",
+                  });
+                }}
+              >
+                <Sparkles size={14} /> Run ATS Match
+              </button>
               <button type="button" className="secondary-button" onClick={() => setModalMode(null)}>
                 Close
               </button>
@@ -3861,80 +4102,184 @@ export function Drives() {
         </div>
       )}
 
-      {/* Add / Edit Modal */}
+      {/* Add / Edit Placement Drive Modal */}
       {(modalMode === "add" || modalMode === "edit") && canEdit && (
         <div className="modal-backdrop" onClick={() => setModalMode(null)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
+          <div className="modal modal-wide" style={{ maxWidth: "800px" }} onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
-              <h2>{modalMode === "edit" ? "Edit Drive" : "Create Placement Drive"}</h2>
+              <div>
+                <h2 style={{ margin: 0, fontSize: "18px" }}>
+                  {modalMode === "edit" ? "Edit Placement Drive" : "Create Placement Drive"}
+                </h2>
+                <p style={{ margin: 0, fontSize: "12.5px", color: "#64748b" }}>
+                  Configure company, job role, academic cut-offs, and skills for ATS evaluation
+                </p>
+              </div>
               <button type="button" onClick={() => setModalMode(null)}>×</button>
             </div>
-            <div className="modal-body">
-              <div className="form-group">
-                <label>Drive Title *</label>
-                <input
-                  type="text"
-                  value={formData.title}
-                  onChange={(e) => setFormData({ ...formData, title: e.target.value })}
-                  placeholder="e.g., Software Development Engineer Campus Drive"
-                />
+
+            <div className="modal-body" style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
+              {/* Row 1: Drive Title & Company */}
+              <div className="form-row two-col">
+                <div className="form-group">
+                  <label>Drive Title *</label>
+                  <input
+                    type="text"
+                    required
+                    value={formData.title}
+                    onChange={(e) => setFormData({ ...formData, title: e.target.value })}
+                    placeholder="e.g., Software Engineer 2026 Campus Drive"
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label>Company *</label>
+                  <select
+                    required
+                    value={formData.company_id}
+                    onChange={(e) => setFormData({ ...formData, company_id: e.target.value })}
+                  >
+                    <option value="">Select Company</option>
+                    {companies.map((c) => (
+                      <option key={c.id} value={c.id}>{c.name}</option>
+                    ))}
+                  </select>
+                </div>
               </div>
 
-              <div className="form-group">
-                <label>Company *</label>
-                <select
-                  value={formData.company_id}
-                  onChange={(e) => setFormData({ ...formData, company_id: e.target.value })}
-                >
-                  <option value="">Select Company</option>
-                  {companies.map((c) => (
-                    <option key={c.id} value={c.id}>{c.name}</option>
-                  ))}
-                </select>
+              {/* Row 2: Job Role & Work Mode */}
+              <div className="form-row two-col">
+                <div className="form-group">
+                  <label>Job Role</label>
+                  <input
+                    type="text"
+                    value={formData.job_role}
+                    onChange={(e) => setFormData({ ...formData, job_role: e.target.value })}
+                    placeholder="e.g., Full Stack Engineer / Cloud Specialist"
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label>Work Mode</label>
+                  <select
+                    value={formData.work_mode}
+                    onChange={(e) => setFormData({ ...formData, work_mode: e.target.value })}
+                  >
+                    <option value="On-site">On-site</option>
+                    <option value="Hybrid">Hybrid</option>
+                    <option value="Remote">Remote</option>
+                  </select>
+                </div>
               </div>
 
-              <div className="form-group">
-                <label>Location *</label>
-                <input
-                  type="text"
-                  value={formData.location}
-                  onChange={(e) => setFormData({ ...formData, location: e.target.value })}
-                  placeholder="e.g., Main Auditorium / Hybrid"
-                />
+              {/* Row 3: Location & CTC Package */}
+              <div className="form-row two-col">
+                <div className="form-group">
+                  <label>Location *</label>
+                  <input
+                    type="text"
+                    required
+                    value={formData.location}
+                    onChange={(e) => setFormData({ ...formData, location: e.target.value })}
+                    placeholder="e.g., Campus Auditorium / Bengaluru"
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label>CTC Package (LPA)</label>
+                  <input
+                    type="text"
+                    value={formData.package_lpa}
+                    onChange={(e) => setFormData({ ...formData, package_lpa: e.target.value })}
+                    placeholder="e.g., 8.5 LPA or 6-10 LPA"
+                  />
+                </div>
               </div>
 
-              <div className="form-group">
-                <label>CTC Package</label>
-                <input
-                  type="text"
-                  value={formData.package_lpa}
-                  onChange={(e) => setFormData({ ...formData, package_lpa: e.target.value })}
-                  placeholder="e.g., 8.5 LPA"
-                />
+              {/* ATS Criteria Box */}
+              <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: "10px", padding: "14px 16px", display: "flex", flexDirection: "column", gap: "12px" }}>
+                <span style={{ fontSize: "12px", fontWeight: 700, color: "#4f46e5", textTransform: "uppercase", letterSpacing: "0.5px", display: "flex", alignItems: "center", gap: "6px" }}>
+                  <Sparkles size={14} /> ATS Eligibility & Matching Criteria
+                </span>
+
+                <div className="form-row three-col">
+                  <div className="form-group">
+                    <label>Min CGPA Cut-off</label>
+                    <input
+                      type="text"
+                      value={formData.min_cgpa}
+                      onChange={(e) => setFormData({ ...formData, min_cgpa: e.target.value })}
+                      placeholder="6.5"
+                    />
+                  </div>
+
+                  <div className="form-group">
+                    <label>Max Backlogs Allowed</label>
+                    <input
+                      type="number"
+                      min="0"
+                      value={formData.max_backlogs}
+                      onChange={(e) => setFormData({ ...formData, max_backlogs: e.target.value })}
+                      placeholder="0"
+                    />
+                  </div>
+
+                  <div className="form-group">
+                    <label>Drive Status</label>
+                    <select
+                      value={formData.status}
+                      onChange={(e) => setFormData({ ...formData, status: e.target.value })}
+                    >
+                      <option value="OPEN">Open / Active</option>
+                      <option value="DRAFT">Draft</option>
+                      <option value="CLOSED">Closed</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="form-group">
+                  <label>Eligible Streams / Departments (Comma Separated)</label>
+                  <input
+                    type="text"
+                    value={formData.departments}
+                    onChange={(e) => setFormData({ ...formData, departments: e.target.value })}
+                    placeholder="CSE, IT, ECE, AIDS, AIML, MECH"
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label>Required Technical Skills (High ATS Weight)</label>
+                  <input
+                    type="text"
+                    value={formData.required_skills}
+                    onChange={(e) => setFormData({ ...formData, required_skills: e.target.value })}
+                    placeholder="e.g., Python, React, SQL, Data Structures, Docker"
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label>Preferred / Good-to-Have Skills</label>
+                  <input
+                    type="text"
+                    value={formData.preferred_skills}
+                    onChange={(e) => setFormData({ ...formData, preferred_skills: e.target.value })}
+                    placeholder="e.g., AWS, Kubernetes, Redis, Machine Learning"
+                  />
+                </div>
               </div>
 
+              {/* Description / Job Details */}
               <div className="form-group">
-                <label>Status</label>
-                <select
-                  value={formData.status}
-                  onChange={(e) => setFormData({ ...formData, status: e.target.value })}
-                >
-                  <option value="OPEN">Open</option>
-                  <option value="DRAFT">Draft</option>
-                  <option value="CLOSED">Closed</option>
-                </select>
-              </div>
-
-              <div className="form-group">
-                <label>Eligibility</label>
+                <label>Job Description / Responsibilities</label>
                 <textarea
                   rows={3}
-                  value={formData.eligibility}
-                  onChange={(e) => setFormData({ ...formData, eligibility: e.target.value })}
-                  placeholder="Eligibility criteria description"
+                  value={formData.description}
+                  onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+                  placeholder="Key responsibilities, project scope, and interview rounds..."
                 />
               </div>
             </div>
+
             <div className="modal-footer">
               <button type="button" className="secondary-button" onClick={() => setModalMode(null)}>
                 Cancel

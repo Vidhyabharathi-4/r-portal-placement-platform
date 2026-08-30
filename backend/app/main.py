@@ -10,12 +10,23 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session, joinedload
+from .ats import calculate_ats_match, extract_text_from_file, parse_jd_text
 from .audit import log_action
 from .config import get_settings
 from .database import Base, SessionLocal, ensure_sqlite_schema, engine, get_db
 from .dependencies import get_current_user, require_roles
 from .models import Application, ApplicationStatus, AuditLog, Company, DriveStatus, Notification, PlacementDrive, PlacementStatus, PlacementTeamDriveAssignment, PlacementTeamMember, RecruiterContact, RecruiterStatus, Role, Student, User
-from .schemas import ApplicationCreate, ApplicationOut, ApplicationStatusUpdate, AuditOut, CompanyBase, CompanyCardOut, CompanyDetailsOut, CompanyOut, CompanyStatusUpdate, DashboardOut, DriveCreate, DriveOut, DriveUpdate, LoginRequest, NotificationOut, PasswordChange, ProfileUpdate, RecruiterContactBase, RecruiterContactCreate, RecruiterContactOut, RecruiterContactUpdate, RecruiterMetricsOut, RecruitersOverviewOut, ReportsOut, SettingsUpdate, StudentCreate, StudentOut, TeamMemberCreate, TeamMemberOut, TeamMemberUpdate, Token, UserCreate, UserOut, UserStatusUpdate
+from .schemas import (
+    ApplicationCreate, ApplicationOut, ApplicationStatusUpdate, AuditOut,
+    ATSBulkMatchOut, ATSMatchItem, CompanyBase, CompanyCardOut, CompanyCreate,
+    CompanyDetailsOut, CompanyOut, CompanyStatusUpdate, CompanyUpdate,
+    DashboardOut, DriveCreate, DriveOut, DriveUpdate, LoginRequest,
+    NotificationOut, PasswordChange, ProfileUpdate, RecruiterContactBase,
+    RecruiterContactCreate, RecruiterContactOut, RecruiterContactUpdate,
+    RecruiterMetricsOut, RecruitersOverviewOut, ReportsOut, SettingsUpdate,
+    StudentCreate, StudentOut, TeamMemberCreate, TeamMemberOut,
+    TeamMemberUpdate, Token, UserCreate, UserOut, UserStatusUpdate,
+)
 from .security import create_access_token, hash_password, verify_password
 
 try:
@@ -310,70 +321,364 @@ def dashboard(db: Session = Depends(get_db), current: User = Depends(get_current
     return DashboardOut(total_students=total_students, eligible_students=eligible, placed_students=placed, placement_percentage=round((placed/total_students)*100,2) if total_students else 0, active_drives=db.scalar(select(func.count()).select_from(PlacementDrive).where(PlacementDrive.status == DriveStatus.OPEN,PlacementDrive.is_archived.is_(False))) or 0, total_companies=db.scalar(select(func.count()).select_from(Company)) or 0, total_applications=db.scalar(select(func.count()).select_from(Application)) or 0, offers=db.scalar(select(func.count()).select_from(Application).where(Application.status == ApplicationStatus.OFFERED)) or 0, recent_drives=drives, recent_activity=activity)
 
 
-@app.get("/api/companies", response_model=list[CompanyOut])
+@app.get("/api/companies", response_model=list[CompanyCardOut])
 def list_companies(db: Session = Depends(get_db), current: User = Depends(get_current_user)):
-    return db.scalars(select(Company).order_by(Company.name)).all()
+    companies = db.scalars(select(Company).order_by(Company.name)).all()
+    results = []
+    for c in companies:
+        recruiters_count = db.scalar(select(func.count()).select_from(RecruiterContact).where(RecruiterContact.company_id == c.id)) or 0
+        drives = db.scalars(select(PlacementDrive).where(PlacementDrive.company_id == c.id).order_by(PlacementDrive.created_at.desc())).all()
+        drive_ids = [d.id for d in drives]
+        
+        placed_students_count = db.scalar(
+            select(func.count()).select_from(Student).where(Student.placed_company_id == c.id)
+        ) or 0
+        
+        latest_drive = drives[0] if drives else None
+        
+        results.append(CompanyCardOut(
+            id=c.id,
+            name=c.name,
+            website=c.website,
+            industry=c.industry,
+            location=c.location,
+            address=c.address,
+            description=c.description,
+            contact_name=c.contact_name,
+            contact_email=c.contact_email,
+            contact_phone=c.contact_phone,
+            contact_designation=c.contact_designation,
+            logo_url=c.logo_url,
+            notes=c.notes,
+            last_contacted_at=c.last_contacted_at,
+            recruiter_status=c.recruiter_status,
+            created_at=c.created_at,
+            updated_at=c.updated_at,
+            recruiter_count=recruiters_count,
+            primary_contact=c.contact_name,
+            primary_email=c.contact_email,
+            primary_phone=c.contact_phone,
+            primary_designation=c.contact_designation or "HR Manager",
+            total_drives=len(drives),
+            latest_drive_title=latest_drive.title if latest_drive else None,
+            latest_drive_date=latest_drive.drive_date if latest_drive else None,
+            latest_drive_status=latest_drive.status.value if latest_drive else None,
+            students_placed_count=placed_students_count,
+        ))
+    return results
 
 
 @app.post("/api/companies", response_model=CompanyOut, status_code=201)
-def create_company(payload: CompanyBase, db: Session = Depends(get_db), current: User = Depends(require_roles(Role.ADMIN))):
-    if db.scalar(select(Company).where(Company.name == payload.name)):
-        raise HTTPException(409, "A company with this name already exists")
-    company = Company(**payload.model_dump()); db.add(company); db.flush()
+def create_company(payload: CompanyCreate, db: Session = Depends(get_db), current: User = Depends(require_roles(Role.ADMIN, Role.MANAGER))):
+    if db.scalar(select(Company).where(Company.name.ilike(payload.name.strip()))):
+        raise HTTPException(409, f"A company with the name '{payload.name}' already exists.")
+    
+    company_data = payload.model_dump()
+    company = Company(**company_data)
+    if not company.last_contacted_at:
+        company.last_contacted_at = datetime.now(timezone.utc)
+    db.add(company)
+    db.flush()
+    
+    # If primary recruiter contact details are provided, auto-create a recruiter contact
+    if company.contact_email:
+        recruiter = RecruiterContact(
+            company_id=company.id,
+            name=company.contact_name or f"{company.name} Campus HR",
+            designation=company.contact_designation or "HR Manager",
+            email=company.contact_email,
+            phone=company.contact_phone,
+            status="ACTIVE",
+            last_contacted=datetime.now(timezone.utc),
+            notes=f"Primary contact for {company.name}"
+        )
+        db.add(recruiter)
+        db.flush()
+    
     log_action(db, current, "CREATE", "company", company.id, {"name": company.name, "status": company.recruiter_status.value})
     notify_admins_and_managers(db, "New Company Added", f"{company.name} was added to the platform.", "COMPANY_CREATED", "company", company.id, exclude_user_id=current.id)
-    audit_commit(db); db.refresh(company); return company
+    audit_commit(db)
+    db.refresh(company)
+    return company
 
 
 @app.put("/api/companies/{company_id}", response_model=CompanyOut)
-def update_company(company_id: int, payload: CompanyBase, db: Session = Depends(get_db), current: User = Depends(require_roles(Role.ADMIN))):
+@app.patch("/api/companies/{company_id}", response_model=CompanyOut)
+def update_company(company_id: int, payload: CompanyUpdate, db: Session = Depends(get_db), current: User = Depends(require_roles(Role.ADMIN, Role.MANAGER))):
     company = db.get(Company, company_id)
-    if not company: raise HTTPException(404, "Company not found")
+    if not company:
+        raise HTTPException(404, "Company not found")
+    
+    update_data = payload.model_dump(exclude_unset=True)
+    if "name" in update_data and update_data["name"] and update_data["name"].strip() != company.name:
+        existing = db.scalar(select(Company).where(Company.name.ilike(update_data["name"].strip()), Company.id != company_id))
+        if existing:
+            raise HTTPException(409, f"Another company with name '{update_data['name']}' already exists.")
+    
     old_status = company.recruiter_status.value
-    for key, value in payload.model_dump().items(): setattr(company, key, value)
+    for key, value in update_data.items():
+        if value is not None:
+            setattr(company, key, value)
+    
+    company.last_contacted_at = datetime.now(timezone.utc)
     log_action(db, current, "UPDATE", "company", company.id, {"name": company.name, "status": company.recruiter_status.value})
     if old_status != company.recruiter_status.value:
         notify_admins_and_managers(db, "Company Status Changed", f"{company.name} status changed from {old_status} to {company.recruiter_status.value}.", "COMPANY_STATUS_CHANGED", "company", company.id, exclude_user_id=current.id)
-    audit_commit(db); db.refresh(company); return company
+    
+    audit_commit(db)
+    db.refresh(company)
+    return company
+
+
+@app.delete("/api/companies/{company_id}", status_code=204)
+def delete_company(company_id: int, db: Session = Depends(get_db), current: User = Depends(require_roles(Role.ADMIN))):
+    company = db.get(Company, company_id)
+    if not company:
+        raise HTTPException(404, "Company not found")
+    log_action(db, current, "DELETE", "company", company.id, {"name": company.name})
+    notify_admins_and_managers(db, "Company Deleted", f"Company '{company.name}' was deleted.", "COMPANY_DELETED", "company", company.id, exclude_user_id=current.id)
+    db.delete(company)
+    audit_commit(db)
 
 
 @app.get("/api/drives", response_model=list[DriveOut])
 def list_drives(status_filter: DriveStatus | None = None, db: Session = Depends(get_db), current: User = Depends(get_current_user)):
     query = select(PlacementDrive).options(joinedload(PlacementDrive.company)).order_by(PlacementDrive.created_at.desc())
-    if status_filter: query = query.where(PlacementDrive.status == status_filter)
+    if status_filter:
+        query = query.where(PlacementDrive.status == status_filter)
     return db.scalars(query).unique().all()
 
 
+@app.get("/api/drives/{drive_id}", response_model=DriveOut)
+def get_drive(drive_id: int, db: Session = Depends(get_db), current: User = Depends(get_current_user)):
+    drive = db.scalar(select(PlacementDrive).options(joinedload(PlacementDrive.company)).where(PlacementDrive.id == drive_id))
+    if not drive:
+        raise HTTPException(404, "Placement drive not found")
+    return drive
+
+
 @app.post("/api/drives", response_model=DriveOut, status_code=201)
-def create_drive(payload: DriveCreate, db: Session = Depends(get_db), current: User = Depends(require_roles(Role.ADMIN))):
-    if not db.get(Company, payload.company_id): raise HTTPException(404, "Company not found")
-    drive = PlacementDrive(**payload.model_dump(), created_by_id=current.id); db.add(drive); db.flush()
-    log_action(db, current, "CREATE", "placement_drive", drive.id, {"title": drive.title, "status": drive.status.value})
-    notify_admins_and_managers(db, "New Placement Drive", f"{drive.title} was created for {drive.location}.", "DRIVE_CREATED", "placement_drive", drive.id, exclude_user_id=current.id)
-    audit_commit(db); db.refresh(drive); return db.scalar(select(PlacementDrive).options(joinedload(PlacementDrive.company)).where(PlacementDrive.id == drive.id))
+def create_drive(payload: DriveCreate, db: Session = Depends(get_db), current: User = Depends(require_roles(Role.ADMIN, Role.MANAGER))):
+    company = db.get(Company, payload.company_id)
+    if not company:
+        raise HTTPException(404, "Company not found")
+    
+    drive_data = payload.model_dump()
+    drive = PlacementDrive(**drive_data, created_by_id=current.id)
+    db.add(drive)
+    db.flush()
+    
+    log_action(db, current, "CREATE", "placement_drive", drive.id, {"title": drive.title, "company": company.name, "status": drive.status.value})
+    notify_admins_and_managers(db, "New Placement Drive", f"{drive.title} was created for {company.name}.", "DRIVE_CREATED", "placement_drive", drive.id, exclude_user_id=current.id)
+    audit_commit(db)
+    db.refresh(drive)
+    return db.scalar(select(PlacementDrive).options(joinedload(PlacementDrive.company)).where(PlacementDrive.id == drive.id))
 
 
 @app.put("/api/drives/{drive_id}", response_model=DriveOut)
-def update_drive(drive_id: int, payload: DriveUpdate, db: Session = Depends(get_db), current: User = Depends(require_roles(Role.ADMIN))):
+@app.patch("/api/drives/{drive_id}", response_model=DriveOut)
+def update_drive(drive_id: int, payload: DriveUpdate, db: Session = Depends(get_db), current: User = Depends(require_roles(Role.ADMIN, Role.MANAGER))):
     drive = db.get(PlacementDrive, drive_id)
-    if not drive: raise HTTPException(404, "Placement drive not found")
-    if not db.get(Company, payload.company_id): raise HTTPException(404, "Company not found")
+    if not drive:
+        raise HTTPException(404, "Placement drive not found")
+    if not db.get(Company, payload.company_id):
+        raise HTTPException(404, "Company not found")
+    
     previous_status = drive.status.value
-    for key, value in payload.model_dump().items(): setattr(drive, key, value)
+    for key, value in payload.model_dump(exclude_unset=True).items():
+        setattr(drive, key, value)
+    
     log_action(db, current, "STATUS_CHANGE" if previous_status != drive.status.value else "UPDATE", "placement_drive", drive.id, {"title": drive.title, "from": previous_status, "to": drive.status.value})
     if previous_status != drive.status.value:
         notify_admins_and_managers(db, "Drive Status Updated", f"{drive.title} status changed from {previous_status} to {drive.status.value}.", "DRIVE_STATUS_CHANGED", "placement_drive", drive.id, exclude_user_id=current.id)
+    
     audit_commit(db)
     return db.scalar(select(PlacementDrive).options(joinedload(PlacementDrive.company)).where(PlacementDrive.id == drive.id))
 
 
 @app.delete("/api/drives/{drive_id}", status_code=204)
-def delete_drive(drive_id: int, db: Session = Depends(get_db), current: User = Depends(require_roles(Role.ADMIN))):
+def delete_drive(drive_id: int, db: Session = Depends(get_db), current: User = Depends(require_roles(Role.ADMIN, Role.MANAGER))):
     drive = db.get(PlacementDrive, drive_id)
-    if not drive: raise HTTPException(404, "Placement drive not found")
+    if not drive:
+        raise HTTPException(404, "Placement drive not found")
     log_action(db, current, "DELETE", "placement_drive", drive.id, {"title": drive.title})
     notify_admins_and_managers(db, "Drive Deleted", f"Placement drive '{drive.title}' was deleted.", "DRIVE_DELETED", "placement_drive", drive.id, exclude_user_id=current.id)
-    db.delete(drive); audit_commit(db)
+    db.delete(drive)
+    audit_commit(db)
+
+
+@app.post("/api/drives/{drive_id}/jd-upload")
+def upload_drive_jd_file(
+    drive_id: int,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current: User = Depends(require_roles(Role.ADMIN, Role.MANAGER))
+):
+    drive = db.get(PlacementDrive, drive_id)
+    if not drive:
+        raise HTTPException(404, "Placement drive not found")
+    
+    filename = file.filename or "jd_document"
+    contents = file.file.read()
+    if not contents:
+        raise HTTPException(400, "Empty document uploaded.")
+    
+    # Save file to uploads directory
+    safe_name = f"jd-{drive.id}-{uuid4().hex[:8]}-{Path(filename).name}"
+    target_path = UPLOAD_DIR / safe_name
+    with target_path.open("wb") as f:
+        f.write(contents)
+    
+    # Extract text and parse requirements
+    extracted_text = extract_text_from_file(contents, filename)
+    parsed = parse_jd_text(extracted_text)
+    
+    drive.jd_document_path = safe_name
+    drive.jd_text = extracted_text
+    if parsed.get("required_skills"):
+        drive.required_skills = ", ".join(parsed["required_skills"])
+    if parsed.get("preferred_skills"):
+        drive.preferred_skills = ", ".join(parsed["preferred_skills"])
+    if parsed.get("min_cgpa"):
+        drive.min_cgpa = parsed["min_cgpa"]
+    if parsed.get("max_backlogs") is not None:
+        drive.max_backlogs = parsed["max_backlogs"]
+    if parsed.get("eligible_departments"):
+        drive.departments = ", ".join(parsed["eligible_departments"])
+    if parsed.get("package_lpa") and not drive.package_lpa:
+        drive.package_lpa = parsed["package_lpa"]
+    
+    log_action(db, current, "UPLOAD_JD", "placement_drive", drive.id, {"filename": safe_name, "skills": drive.required_skills})
+    audit_commit(db)
+    
+    return {
+        "message": "Job description parsed and attached successfully!",
+        "filename": safe_name,
+        "extracted_text_preview": parsed.get("extracted_text_preview", ""),
+        "parsed_requirements": parsed,
+        "drive_id": drive.id,
+    }
+
+
+@app.get("/api/drives/{drive_id}/ats-match", response_model=ATSBulkMatchOut)
+def get_drive_ats_matches(drive_id: int, db: Session = Depends(get_db), current: User = Depends(get_current_user)):
+    drive = db.scalar(select(PlacementDrive).options(joinedload(PlacementDrive.company)).where(PlacementDrive.id == drive_id))
+    if not drive:
+        raise HTTPException(404, "Placement drive not found")
+    
+    students = db.scalars(select(Student).order_by(Student.name)).all()
+    existing_applications = {
+        app.student_id: app.status.value for app in db.scalars(select(Application).where(Application.drive_id == drive_id)).all() if app.student_id
+    }
+    
+    matches = []
+    eligible_count = 0
+    high_match_count = 0
+    
+    for s in students:
+        match_data = calculate_ats_match(s, drive)
+        has_app = s.id in existing_applications
+        app_status = existing_applications.get(s.id)
+        
+        match_item = ATSMatchItem(
+            student_id=s.id,
+            student_name=s.name,
+            registration_number=s.registration_number,
+            department=match_data["department"],
+            cgpa=match_data["cgpa"],
+            skills=match_data["skills"],
+            ats_score=match_data["ats_score"],
+            skills_match_pct=match_data["skills_match_pct"],
+            academic_match_pct=match_data["academic_match_pct"],
+            dept_match_pct=match_data["dept_match_pct"],
+            matched_skills=match_data["matched_skills"],
+            missing_skills=match_data["missing_skills"],
+            matched_preferred_skills=match_data["matched_preferred_skills"],
+            is_eligible=match_data["is_eligible"],
+            reasons=match_data["reasons"],
+            has_applied=has_app,
+            application_status=app_status,
+        )
+        
+        if match_item.is_eligible:
+            eligible_count += 1
+        if match_item.ats_score >= 70:
+            high_match_count += 1
+            
+        matches.append(match_item)
+    
+    # Sort ranked by ATS Score descending
+    matches.sort(key=lambda m: (m.is_eligible, m.ats_score), reverse=True)
+    
+    req_skills = [s.strip() for s in (drive.required_skills or "").split(",") if s.strip()]
+    pref_skills = [s.strip() for s in (drive.preferred_skills or "").split(",") if s.strip()]
+    depts = [d.strip() for d in (drive.departments or "").split(",") if d.strip()]
+    
+    min_cgpa_val = 6.0
+    try:
+        min_cgpa_val = float(str(drive.min_cgpa).split()[0])
+    except Exception:
+        min_cgpa_val = 6.0
+        
+    return ATSBulkMatchOut(
+        drive_id=drive.id,
+        drive_title=drive.title,
+        company_name=drive.company.name if drive.company else "Company",
+        required_skills=req_skills,
+        preferred_skills=pref_skills,
+        min_cgpa=min_cgpa_val,
+        max_backlogs=drive.max_backlogs or 0,
+        eligible_departments=depts,
+        total_candidates=len(students),
+        eligible_count=eligible_count,
+        high_match_count=high_match_count,
+        matches=matches,
+    )
+
+
+@app.post("/api/drives/{drive_id}/ats-shortlist")
+def shortlist_candidates_bulk(
+    drive_id: int,
+    payload: dict,
+    db: Session = Depends(get_db),
+    current: User = Depends(require_roles(Role.ADMIN, Role.MANAGER))
+):
+    drive = db.get(PlacementDrive, drive_id)
+    if not drive:
+        raise HTTPException(404, "Placement drive not found")
+    
+    student_ids = payload.get("student_ids", [])
+    if not student_ids:
+        raise HTTPException(400, "No students selected for shortlisting.")
+    
+    shortlisted_count = 0
+    for sid in student_ids:
+        student = db.get(Student, sid)
+        if not student:
+            continue
+        
+        app = db.scalar(select(Application).where(Application.drive_id == drive_id, Application.student_id == sid))
+        if app:
+            app.status = ApplicationStatus.SHORTLISTED
+        else:
+            app = Application(
+                drive_id=drive_id,
+                student_id=student.id,
+                student_name=student.name,
+                student_email=student.email,
+                status=ApplicationStatus.SHORTLISTED,
+            )
+            db.add(app)
+        shortlisted_count += 1
+    
+    log_action(db, current, "ATS_SHORTLIST", "placement_drive", drive.id, {"shortlisted_count": shortlisted_count})
+    notify_admins_and_managers(db, "Candidates Shortlisted", f"{shortlisted_count} candidates shortlisted for {drive.title} via ATS matching.", "APPLICATION_STATUS_CHANGED", "placement_drive", drive.id, exclude_user_id=current.id)
+    audit_commit(db)
+    
+    return {
+        "message": f"Successfully shortlisted {shortlisted_count} candidate(s) for {drive.title}!",
+        "shortlisted_count": shortlisted_count
+    }
 
 
 @app.get("/api/applications", response_model=list[ApplicationOut])
@@ -1129,23 +1434,184 @@ def download_recruiter_template(format: str = Query("xlsx", pattern="^(xlsx|csv)
 
 
 @app.get("/api/recruiters/{recruiter_id}", response_model=CompanyDetailsOut)
+@app.get("/api/companies/{recruiter_id}/details", response_model=CompanyDetailsOut)
 def get_recruiter_details(recruiter_id: int, db: Session = Depends(get_db), current: User = Depends(get_current_user)):
     company = db.get(Company, recruiter_id)
     if not company:
-        raise HTTPException(404, "Recruiter not found")
-    drives = db.scalars(select(PlacementDrive).where(PlacementDrive.company_id == recruiter_id)).all()
+        raise HTTPException(404, "Company not found")
+    
+    drives = db.scalars(select(PlacementDrive).where(PlacementDrive.company_id == recruiter_id).order_by(PlacementDrive.created_at.desc())).all()
     drive_ids = [d.id for d in drives]
-    total_applications = db.scalar(select(func.count()).select_from(Application).where(Application.drive_id.in_(drive_ids))) if drive_ids else 0
-    selected_students = db.scalar(select(func.count()).select_from(Application).where(Application.drive_id.in_(drive_ids), Application.status == ApplicationStatus.OFFERED)) if drive_ids else 0
-    active_drives = len([d for d in drives if d.status == DriveStatus.OPEN and not d.is_archived])
+    
+    # 1. Recruiters
+    recruiters = db.scalars(select(RecruiterContact).where(RecruiterContact.company_id == recruiter_id).order_by(RecruiterContact.name)).all()
+    
+    # 2. Applications for this company
+    applications_raw = db.scalars(
+        select(Application)
+        .options(joinedload(Application.student), joinedload(Application.drive))
+        .where(Application.drive_id.in_(drive_ids))
+        .order_by(Application.created_at.desc())
+    ).unique().all() if drive_ids else []
+    
+    total_applications = len(applications_raw)
+    selected_students_count = len([a for a in applications_raw if a.status == ApplicationStatus.OFFERED])
+    
+    # 3. Placed students for this company
+    placed_students_query = db.scalars(
+        select(Student).where(Student.placed_company_id == recruiter_id)
+    ).all()
+    
+    placed_students_list = []
+    seen_placed_ids = set()
+    for s in placed_students_query:
+        seen_placed_ids.add(s.id)
+        placed_students_list.append({
+            "student_id": s.id,
+            "name": s.name,
+            "registration_number": s.registration_number,
+            "department": s.department,
+            "cgpa": s.cgpa or "—",
+            "package_lpa": s.offer_package_lpa or "Best in Industry",
+            "placed_date": s.updated_at.isoformat() if s.updated_at else None,
+            "drive_title": "Campus Placement",
+        })
+        
+    for a in applications_raw:
+        if a.status == ApplicationStatus.OFFERED and a.student and a.student.id not in seen_placed_ids:
+            seen_placed_ids.add(a.student.id)
+            placed_students_list.append({
+                "student_id": a.student.id,
+                "name": a.student.name,
+                "registration_number": a.student.registration_number,
+                "department": a.student.department,
+                "cgpa": a.student.cgpa or "—",
+                "package_lpa": a.drive.package_lpa if a.drive else "Best in Industry",
+                "placed_date": a.created_at.isoformat(),
+                "drive_title": a.drive.title if a.drive else "Campus Drive",
+            })
+    
+    # 4. Enriched Drives list
+    drives_list = []
+    jds_list = []
+    for d in drives:
+        d_apps = [a for a in applications_raw if a.drive_id == d.id]
+        app_count = len(d_apps)
+        shortlisted_count = len([a for a in d_apps if a.status == ApplicationStatus.SHORTLISTED])
+        interview_count = len([a for a in d_apps if a.status == ApplicationStatus.INTERVIEW])
+        offered_count = len([a for a in d_apps if a.status == ApplicationStatus.OFFERED])
+        
+        req_skills_list = [s.strip() for s in (d.required_skills or "").split(",") if s.strip()]
+        pref_skills_list = [s.strip() for s in (d.preferred_skills or "").split(",") if s.strip()]
+        dept_list = [dept.strip() for dept in (d.departments or "").split(",") if dept.strip()]
+        
+        drives_list.append({
+            "id": d.id,
+            "title": d.title,
+            "job_role": d.job_role or d.title,
+            "location": d.location,
+            "package_lpa": d.package_lpa or "—",
+            "eligibility": d.eligibility,
+            "min_cgpa": d.min_cgpa or "6.0",
+            "max_backlogs": d.max_backlogs or 0,
+            "required_skills": d.required_skills,
+            "preferred_skills": d.preferred_skills,
+            "departments": d.departments,
+            "status": d.status.value,
+            "work_mode": d.work_mode or "On-site",
+            "drive_date": d.drive_date.isoformat() if d.drive_date else None,
+            "deadline": d.deadline.isoformat() if d.deadline else None,
+            "applications_count": app_count,
+            "shortlisted_count": shortlisted_count,
+            "interview_count": interview_count,
+            "offered_count": offered_count,
+            "placed_count": offered_count,
+            "created_at": d.created_at.isoformat() if d.created_at else None,
+        })
+        
+        jds_list.append({
+            "id": d.id,
+            "drive_id": d.id,
+            "drive_title": d.title,
+            "job_title": d.title,
+            "job_role": d.job_role or d.title,
+            "description": d.description or d.eligibility,
+            "required_skills": req_skills_list,
+            "preferred_skills": pref_skills_list,
+            "eligible_departments": dept_list,
+            "min_cgpa": d.min_cgpa or "6.0",
+            "max_backlogs": d.max_backlogs or 0,
+            "experience_requirement": d.experience_requirement or "Fresher / Final Year",
+            "certifications": d.certifications or "Not Required",
+            "package_lpa": d.package_lpa or "As per company norms",
+            "location": d.location,
+            "jd_document_path": d.jd_document_path,
+            "created_at": d.created_at.isoformat() if d.created_at else None,
+        })
+    
+    # 5. Eligible Students calculation
+    eligible_students_list = []
+    if drives:
+        all_students = db.scalars(select(Student).where(Student.is_eligible.is_(True)).order_by(Student.name)).all()
+        for s in all_students[:30]:
+            eligible_students_list.append({
+                "id": s.id,
+                "name": s.name,
+                "registration_number": s.registration_number,
+                "department": s.department,
+                "cgpa": s.cgpa or "—",
+                "skills": s.skills or "—",
+                "placement_status": s.placement_status.value,
+            })
+    
+    # 6. Applications detailed list
+    apps_list = []
+    for a in applications_raw:
+        apps_list.append({
+            "id": a.id,
+            "student_id": a.student_id,
+            "student_name": a.student_name,
+            "student_email": a.student_email,
+            "department": a.student.department if a.student else "—",
+            "cgpa": a.student.cgpa if a.student else "—",
+            "drive_id": a.drive_id,
+            "drive_title": a.drive.title if a.drive else "—",
+            "status": a.status.value,
+            "applied_at": a.created_at.isoformat() if a.created_at else None,
+            "resume_path": a.resume_path,
+        })
+        
+    # 7. Activity History (audit logs)
+    audit_logs = db.scalars(
+        select(AuditLog)
+        .where(
+            (AuditLog.entity_type == "company") & (AuditLog.entity_id == str(recruiter_id))
+            | (AuditLog.entity_type == "placement_drive") & (AuditLog.entity_id.in_([str(did) for did in drive_ids]))
+        )
+        .order_by(AuditLog.created_at.desc())
+        .limit(25)
+    ).all()
+    
+    activity_history_list = [{
+        "id": log.id,
+        "action": log.action,
+        "entity_type": log.entity_type,
+        "entity_id": log.entity_id,
+        "details": log.details,
+        "created_at": log.created_at.isoformat(),
+    } for log in audit_logs]
+    
+    active_drives_count = len([d for d in drives if d.status == DriveStatus.OPEN and not d.is_archived])
     last_drive = max([d.created_at for d in drives], default=None) if drives else company.updated_at
-    recruiters = db.scalars(select(RecruiterContact).where(RecruiterContact.company_id == recruiter_id)).all()
     
     return CompanyDetailsOut(
         id=company.id,
         name=company.name,
         website=company.website,
         industry=company.industry,
+        location=company.location,
+        address=company.address,
+        description=company.description,
         contact_name=company.contact_name,
         contact_email=company.contact_email,
         contact_phone=company.contact_phone,
@@ -1156,27 +1622,21 @@ def get_recruiter_details(recruiter_id: int, db: Session = Depends(get_db), curr
         recruiter_status=company.recruiter_status,
         created_at=company.created_at,
         updated_at=company.updated_at,
+        total_recruiters=len(recruiters),
         total_drives=len(drives),
-        active_drives=active_drives,
-        total_applications=total_applications or 0,
-        selected_students=selected_students or 0,
+        active_drives=active_drives_count,
+        total_applications=total_applications,
+        selected_students=selected_students_count,
+        placed_students_count=len(placed_students_list),
         last_engagement=last_drive,
         recruiters=[RecruiterContactOut.model_validate(r) for r in recruiters],
-        drives=[{
-            "id": d.id,
-            "title": d.title,
-            "location": d.location,
-            "package_lpa": d.package_lpa,
-            "status": d.status.value,
-            "drive_date": d.drive_date.isoformat() if d.drive_date else None,
-            "created_at": d.created_at.isoformat() if d.created_at else None,
-        } for d in drives]
+        drives=drives_list,
+        job_descriptions=jds_list,
+        eligible_students=eligible_students_list,
+        applications=apps_list,
+        placed_students=placed_students_list,
+        activity_history=activity_history_list,
     )
-
-
-@app.get("/api/companies/{company_id}/details", response_model=CompanyDetailsOut)
-def get_company_full_details(company_id: int, db: Session = Depends(get_db), current: User = Depends(get_current_user)):
-    return get_recruiter_details(recruiter_id=company_id, db=db, current=current)
 
 
 @app.patch("/api/companies/{company_id}/status", response_model=CompanyOut)
