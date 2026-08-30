@@ -27,6 +27,10 @@
       "destination": "/frontend/favicon.ico"
     },
     {
+      "source": "/",
+      "destination": "/frontend/index.html"
+    },
+    {
       "source": "/:path*",
       "destination": "/frontend/index.html"
     }
