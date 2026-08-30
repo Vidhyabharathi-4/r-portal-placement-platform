@@ -90,31 +90,102 @@ export function canManageApplications() {
   return getUserRole() === "ADMIN";
 }
 
-export async function api(path, options = {}) {
-  const token = localStorage.getItem("rportal_token");
-  const response = await fetch(`${API_BASE}${path}`, {
-    ...options,
-    headers: {
-      "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...(options.headers || {}),
-    },
-  });
+const memoryCache = new Map();
+const inflightRequests = new Map();
 
-  if (!response.ok) {
-    let errorDetail = `Request failed: ${response.status}`;
-    try {
-      const errorJson = await response.json();
-      errorDetail = errorJson.detail || errorJson.message || errorDetail;
-    } catch {
-      const errorText = await response.text();
-      if (errorText) errorDetail = errorText;
+export function getCached(key) {
+  const item = memoryCache.get(key);
+  if (!item) return undefined;
+  if (Date.now() - item.timestamp > 180000) return undefined; // 3 min cache TTL
+  return item.data;
+}
+
+export function setCached(key, data) {
+  memoryCache.set(key, { data, timestamp: Date.now() });
+}
+
+export function invalidateCache(prefix = "") {
+  if (!prefix) {
+    memoryCache.clear();
+  } else {
+    for (const key of memoryCache.keys()) {
+      if (key.startsWith(prefix)) {
+        memoryCache.delete(key);
+      }
     }
-    throw new Error(errorDetail);
+  }
+}
+
+export async function api(path, options = {}) {
+  const isGet = !options.method || options.method.toUpperCase() === "GET";
+  const token = localStorage.getItem("rportal_token");
+
+  if (!isGet) {
+    const response = await fetch(`${API_BASE}${path}`, {
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...(options.headers || {}),
+      },
+    });
+
+    if (!response.ok) {
+      let errorDetail = `Request failed: ${response.status}`;
+      try {
+        const errorJson = await response.json();
+        errorDetail = errorJson.detail || errorJson.message || errorDetail;
+      } catch {
+        const errorText = await response.text();
+        if (errorText) errorDetail = errorText;
+      }
+      throw new Error(errorDetail);
+    }
+
+    invalidateCache();
+    if (response.status === 204) return null;
+    return response.json();
   }
 
-  if (response.status === 204) return null;
-  return response.json();
+  // Deduplicate concurrent GET requests
+  if (inflightRequests.has(path)) {
+    return inflightRequests.get(path);
+  }
+
+  const reqPromise = (async () => {
+    try {
+      const response = await fetch(`${API_BASE}${path}`, {
+        ...options,
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          ...(options.headers || {}),
+        },
+      });
+
+      if (!response.ok) {
+        let errorDetail = `Request failed: ${response.status}`;
+        try {
+          const errorJson = await response.json();
+          errorDetail = errorJson.detail || errorJson.message || errorDetail;
+        } catch {
+          const errorText = await response.text();
+          if (errorText) errorDetail = errorText;
+        }
+        throw new Error(errorDetail);
+      }
+
+      if (response.status === 204) return null;
+      const data = await response.json();
+      setCached(path, data);
+      return data;
+    } finally {
+      inflightRequests.delete(path);
+    }
+  })();
+
+  inflightRequests.set(path, reqPromise);
+  return reqPromise;
 }
 
 export function LoadingState({ message = "Loading operational data…" }) {
@@ -200,12 +271,12 @@ function SortHeader({ label, sortKey, currentSort, onSort }) {
 ========================================================= */
 
 export function Dashboard() {
-  const [data, setData] = useState(null);
-  const [companies, setCompanies] = useState([]);
-  const [drives, setDrives] = useState([]);
-  const [applications, setApplications] = useState([]);
-  const [audit, setAudit] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [data, setData] = useState(() => getCached("/api/dashboard") || null);
+  const [companies, setCompanies] = useState(() => getCached("/api/companies") || []);
+  const [drives, setDrives] = useState(() => getCached("/api/drives") || []);
+  const [applications, setApplications] = useState(() => getCached("/api/applications") || []);
+  const [audit, setAudit] = useState(() => getCached("/api/audit") || []);
+  const [loading, setLoading] = useState(() => !getCached("/api/dashboard"));
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -213,7 +284,7 @@ export function Dashboard() {
 
     async function load() {
       try {
-        setLoading(true);
+        if (!getCached("/api/dashboard")) setLoading(true);
         const [dashboardData, companyData, driveData, appData, auditData] =
           await Promise.all([
             api("/api/dashboard"),
@@ -230,7 +301,7 @@ export function Dashboard() {
         setApplications(Array.isArray(appData) ? appData : []);
         setAudit(Array.isArray(auditData) ? auditData : []);
       } catch (err) {
-        if (active) setError(err.message);
+        if (active && !data) setError(err.message);
       } finally {
         if (active) setLoading(false);
       }
@@ -242,8 +313,8 @@ export function Dashboard() {
     };
   }, []);
 
-  if (loading) return <LoadingState />;
-  if (error) return <ErrorState message={error} />;
+  if (loading && !data) return <LoadingState />;
+  if (error && !data) return <ErrorState message={error} />;
 
   const stats = data || {};
   const totalStudents = stats.total_students ?? 0;
@@ -417,12 +488,12 @@ export function Dashboard() {
 
 export function Students() {
   const canEdit = canManageStudents();
-  const [students, setStudents] = useState([]);
+  const [students, setStudents] = useState(() => getCached("/api/students") || []);
   const [search, setSearch] = useState("");
   const [department, setDepartment] = useState("ALL");
   const [status, setStatus] = useState("ALL");
   const [sort, setSort] = useState({ key: "name", direction: "asc" });
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => !(getCached("/api/students")?.length > 0));
   const [error, setError] = useState("");
   const [notification, setNotification] = useState(null);
   const [showExportModal, setShowExportModal] = useState(false);
@@ -448,11 +519,11 @@ export function Students() {
 
   async function loadStudents() {
     try {
-      setLoading(true);
+      if (!getCached("/api/students")?.length) setLoading(true);
       const result = await api("/api/students");
       setStudents(Array.isArray(result) ? result : []);
     } catch (err) {
-      setError(err.message);
+      if (!students.length) setError(err.message);
       showNotification(err.message, "error");
     } finally {
       setLoading(false);
@@ -1084,14 +1155,14 @@ export function Students() {
 
 export function PlacementTeam() {
   const canEdit = canManagePlacementTeam();
-  const [members, setMembers] = useState([]);
-  const [drives, setDrives] = useState([]);
-  const [users, setUsers] = useState([]);
+  const [members, setMembers] = useState(() => getCached("/api/placement-team") || []);
+  const [drives, setDrives] = useState(() => getCached("/api/drives") || []);
+  const [users, setUsers] = useState(() => getCached("/api/users") || []);
   const [search, setSearch] = useState("");
   const [roleFilter, setRoleFilter] = useState("ALL");
   const [statusFilter, setStatusFilter] = useState("ALL");
   const [sort, setSort] = useState({ key: "name", direction: "asc" });
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => !(getCached("/api/placement-team")?.length > 0));
   const [saving, setSaving] = useState(false);
   const [importing, setImporting] = useState(false);
   const [importFeedback, setImportFeedback] = useState(null);
@@ -1122,7 +1193,7 @@ export function PlacementTeam() {
 
   async function loadAll() {
     try {
-      setLoading(true);
+      if (!getCached("/api/placement-team")?.length) setLoading(true);
       setError("");
 
       const [teamResult, driveResult, usersResult] = await Promise.all([
@@ -1135,7 +1206,7 @@ export function PlacementTeam() {
       setDrives(Array.isArray(driveResult) ? driveResult : []);
       setUsers(Array.isArray(usersResult) ? usersResult : []);
     } catch (err) {
-      setError(err.message || "Unable to load placement team data.");
+      if (!members.length) setError(err.message || "Unable to load placement team data.");
       showNotification(err.message || "Unable to load placement team data.", "error");
     } finally {
       setLoading(false);
@@ -1948,12 +2019,12 @@ export function PlacementTeam() {
 
 export function Recruiters() {
   const canEdit = canManageRecruiters();
-  const [companies, setCompanies] = useState([]);
+  const [companies, setCompanies] = useState(() => getCached("/api/recruiters") || []);
   const [search, setSearch] = useState("");
   const [temperature, setTemperature] = useState("ALL");
   const [onlyActive, setOnlyActive] = useState(false);
   const [sort, setSort] = useState({ key: "name", direction: "asc" });
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => !(getCached("/api/recruiters")?.length > 0));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notification, setNotification] = useState(null);
@@ -1980,12 +2051,12 @@ export function Recruiters() {
 
   async function loadRecruiters() {
     try {
-      setLoading(true);
+      if (!getCached("/api/recruiters")?.length) setLoading(true);
       setError("");
       const result = await api("/api/recruiters");
       setCompanies(Array.isArray(result) ? result : []);
     } catch (err) {
-      setError(err.message || "Unable to load recruiter records.");
+      if (!companies.length) setError(err.message || "Unable to load recruiter records.");
       showNotification(err.message, "error");
     } finally {
       setLoading(false);
@@ -2513,12 +2584,12 @@ export function Recruiters() {
 
 export function Drives() {
   const canEdit = canManageDrives();
-  const [drives, setDrives] = useState([]);
-  const [companies, setCompanies] = useState([]);
+  const [drives, setDrives] = useState(() => getCached("/api/drives") || []);
+  const [companies, setCompanies] = useState(() => getCached("/api/companies") || []);
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("ALL");
   const [sort, setSort] = useState({ key: "title", direction: "asc" });
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => !(getCached("/api/drives")?.length > 0));
   const [error, setError] = useState("");
   const [showExportModal, setShowExportModal] = useState(false);
 
@@ -2536,7 +2607,7 @@ export function Drives() {
 
   async function loadDrives() {
     try {
-      setLoading(true);
+      if (!getCached("/api/drives")?.length) setLoading(true);
       const [driveList, compList] = await Promise.all([
         api("/api/drives"),
         api("/api/companies"),
@@ -2544,7 +2615,7 @@ export function Drives() {
       setDrives(Array.isArray(driveList) ? driveList : []);
       setCompanies(Array.isArray(compList) ? compList : []);
     } catch (err) {
-      setError(err.message);
+      if (!drives.length) setError(err.message);
     } finally {
       setLoading(false);
     }
@@ -2922,21 +2993,21 @@ export function Drives() {
 
 export function Applications() {
   const canEdit = canManageApplications();
-  const [applications, setApplications] = useState([]);
+  const [applications, setApplications] = useState(() => getCached("/api/applications") || []);
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("ALL");
   const [sort, setSort] = useState({ key: "student_name", direction: "asc" });
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => !(getCached("/api/applications")?.length > 0));
   const [error, setError] = useState("");
   const [showExportModal, setShowExportModal] = useState(false);
 
   async function loadApplications() {
     try {
-      setLoading(true);
+      if (!getCached("/api/applications")?.length) setLoading(true);
       const result = await api("/api/applications");
       setApplications(Array.isArray(result) ? result : []);
     } catch (err) {
-      setError(err.message);
+      if (!applications.length) setError(err.message);
     } finally {
       setLoading(false);
     }
@@ -3137,9 +3208,9 @@ export function Applications() {
 ========================================================= */
 
 export function Reports() {
-  const [reportsData, setReportsData] = useState(null);
-  const [companies, setCompanies] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [reportsData, setReportsData] = useState(() => getCached("/api/reports") || null);
+  const [companies, setCompanies] = useState(() => getCached("/api/companies") || []);
+  const [loading, setLoading] = useState(() => !getCached("/api/reports"));
   const [error, setError] = useState("");
 
   // Report Filters
@@ -3154,7 +3225,10 @@ export function Reports() {
 
   async function loadReport() {
     try {
-      setLoading(true);
+      const isInitialDefault = search === "" && selectedCompany === "ALL" && selectedDept === "ALL" && studentStatus === "ALL" && companyStatus === "ALL";
+      if (!isInitialDefault || !getCached("/api/reports")) {
+        setLoading(true);
+      }
       setError("");
 
       const params = new URLSearchParams();
@@ -3164,15 +3238,16 @@ export function Reports() {
       if (studentStatus !== "ALL") params.append("student_status", studentStatus);
       if (companyStatus !== "ALL") params.append("company_status", companyStatus);
 
+      const queryString = params.toString() ? `?${params.toString()}` : "";
       const [repResult, compList] = await Promise.all([
-        api(`/api/reports?${params.toString()}`),
+        api(`/api/reports${queryString}`),
         api("/api/companies"),
       ]);
 
       setReportsData(repResult);
       setCompanies(Array.isArray(compList) ? compList : []);
     } catch (err) {
-      setError(err.message || "Failed to load report data.");
+      if (!reportsData) setError(err.message || "Failed to load report data.");
     } finally {
       setLoading(false);
     }
@@ -3529,16 +3604,17 @@ export function Reports() {
 ========================================================= */
 
 export function AuditLog() {
-  const [audit, setAudit] = useState([]);
+  const [audit, setAudit] = useState(() => getCached("/api/audit") || []);
   const [search, setSearch] = useState("");
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => !(getCached("/api/audit")?.length > 0));
   const [error, setError] = useState("");
   const [showExportModal, setShowExportModal] = useState(false);
 
   useEffect(() => {
+    if (!getCached("/api/audit")?.length) setLoading(true);
     api("/api/audit")
       .then((result) => setAudit(Array.isArray(result) ? result : []))
-      .catch((err) => setError(err.message))
+      .catch((err) => { if (!audit.length) setError(err.message); })
       .finally(() => setLoading(false));
   }, []);
 
@@ -3640,15 +3716,15 @@ export function AuditLog() {
 ========================================================= */
 
 export function Notifications() {
-  const [notifications, setNotifications] = useState([]);
+  const [notifications, setNotifications] = useState(() => getCached("/api/notifications") || []);
   const [filter, setFilter] = useState("ALL");
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => !(getCached("/api/notifications")?.length > 0));
   const [error, setError] = useState("");
-  const [unreadCount, setUnreadCount] = useState(0);
+  const [unreadCount, setUnreadCount] = useState(() => getCached("/api/notifications/unread-count")?.unread_count || 0);
 
   async function loadNotifications() {
     try {
-      setLoading(true);
+      if (!getCached("/api/notifications")?.length) setLoading(true);
       setError("");
       const [listResult, countResult] = await Promise.all([
         api("/api/notifications"),
@@ -3658,7 +3734,7 @@ export function Notifications() {
       setNotifications(Array.isArray(listResult) ? listResult : []);
       setUnreadCount(countResult?.unread_count || 0);
     } catch (err) {
-      setError(err.message || "Unable to load notifications.");
+      if (!notifications.length) setError(err.message || "Unable to load notifications.");
     } finally {
       setLoading(false);
     }
@@ -3799,7 +3875,7 @@ export function Settings() {
   const onSignOut = outletCtx.onSignOut || (() => {});
 
   const [activeTab, setActiveTab] = useState("profile");
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => !currentCtxUser && !getCached("/api/settings"));
   const [savingProfile, setSavingProfile] = useState(false);
   const [savingPassword, setSavingPassword] = useState(false);
   const [savingPrefs, setSavingPrefs] = useState(false);
@@ -3845,7 +3921,7 @@ export function Settings() {
   });
 
   // Admin User Management
-  const [adminUsers, setAdminUsers] = useState([]);
+  const [adminUsers, setAdminUsers] = useState(() => getCached("/api/users?include_inactive=true") || []);
   const [userSearch, setUserSearch] = useState("");
   const [userRoleFilter, setUserRoleFilter] = useState("ALL");
   const [userLoading, setUserLoading] = useState(false);
@@ -3857,7 +3933,7 @@ export function Settings() {
 
   async function loadSettings() {
     try {
-      setLoading(true);
+      if (!currentCtxUser && !getCached("/api/settings")) setLoading(true);
       setError("");
       const result = await api("/api/settings");
       const u = result.user || currentCtxUser;
@@ -3878,7 +3954,7 @@ export function Settings() {
         loadAdminUsers();
       }
     } catch (err) {
-      setError(err.message || "Failed to load settings.");
+      if (!userProfile) setError(err.message || "Failed to load settings.");
     } finally {
       setLoading(false);
     }
