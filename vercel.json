@@ -27,6 +27,18 @@
       "destination": "/frontend/favicon.ico"
     },
     {
+      "source": "/favicon.svg",
+      "destination": "/frontend/favicon.svg"
+    },
+    {
+      "source": "/icons.svg",
+      "destination": "/frontend/icons.svg"
+    },
+    {
+      "source": "/rathinam-logo.png",
+      "destination": "/frontend/rathinam-logo.png"
+    },
+    {
       "source": "/",
       "destination": "/frontend/index.html"
     },
