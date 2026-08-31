@@ -6,7 +6,7 @@ from .database import Base
 class Role(str,enum.Enum): ADMIN="ADMIN"; MANAGER="MANAGER"; LEAD="LEAD"
 class DriveStatus(str,enum.Enum): DRAFT="DRAFT"; OPEN="OPEN"; CLOSED="CLOSED"
 class ApplicationStatus(str,enum.Enum): APPLIED="APPLIED"; SHORTLISTED="SHORTLISTED"; INTERVIEW="INTERVIEW"; OFFERED="OFFERED"; REJECTED="REJECTED"; WITHDRAWN="WITHDRAWN"
-class RecruiterStatus(str,enum.Enum): HOT="HOT"; WARM="WARM"; COLD="COLD"
+class RecruiterStatus(str,enum.Enum): HOT="HOT"; WARM="WARM"; COLD="COLD"; DRIVE_COMPLETED="DRIVE_COMPLETED"
 class PlacementStatus(str,enum.Enum): SEEKING="SEEKING"; PLACED="PLACED"; NOT_ELIGIBLE="NOT_ELIGIBLE"
 class Timestamped:
  created_at:Mapped[datetime]=mapped_column(DateTime(timezone=True),default=lambda: datetime.now(timezone.utc)); updated_at:Mapped[datetime]=mapped_column(DateTime(timezone=True),default=lambda: datetime.now(timezone.utc),onupdate=lambda: datetime.now(timezone.utc))

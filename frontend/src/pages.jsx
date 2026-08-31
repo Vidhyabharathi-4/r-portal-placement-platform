@@ -390,10 +390,9 @@ export function Dashboard() {
                 <div className="compact-row" key={drive.id || index}>
                   <div>
                     <strong>
-                      {drive.company_name ||
-                        drive.company ||
-                        drive.role ||
-                        "Placement Drive"}
+                      {typeof drive.company === "object"
+                        ? (drive.company?.name || drive.title || "Placement Drive")
+                        : (drive.company_name || drive.role || "Placement Drive")}
                     </strong>
                     <span>
                       {drive.drive_date || drive.date || "Date not available"}
@@ -2016,6 +2015,7 @@ export function Recruiters() {
     cold: companies.filter((c) => c.recruiter_status === "COLD").length,
     warm: companies.filter((c) => c.recruiter_status === "WARM").length,
     hot: companies.filter((c) => c.recruiter_status === "HOT").length,
+    drive_completed: companies.filter((c) => c.recruiter_status === "DRIVE_COMPLETED").length,
   };
 
   async function handleSave() {
@@ -2140,6 +2140,7 @@ export function Recruiters() {
               <option value="HOT">Hot</option>
               <option value="WARM">Warm</option>
               <option value="COLD">Cold</option>
+              <option value="DRIVE_COMPLETED">Drive Completed</option>
             </select>
             <ChevronDown size={15} />
           </div>
@@ -2295,6 +2296,7 @@ export function Recruiters() {
                   <option value="COLD">Cold</option>
                   <option value="WARM">Warm</option>
                   <option value="HOT">Hot</option>
+                  <option value="DRIVE_COMPLETED">Drive Completed</option>
                 </select>
               </div>
             </div>
@@ -2358,7 +2360,7 @@ export function Drives() {
 
     return (
       (!q ||
-        String(drive.company_name || drive.company || "")
+        String(typeof drive.company === "object" ? (drive.company?.name || drive.title) : (drive.company_name || drive.role || ""))
           .toLowerCase()
           .includes(q) ||
         String(drive.role || "").toLowerCase().includes(q)) &&
@@ -2435,7 +2437,7 @@ export function Drives() {
                   <tr key={drive.id || index}>
                     <td>
                       <strong>
-                        {drive.company_name || drive.company || "—"}
+                        {typeof drive.company === "object" ? (drive.company?.name || drive.title || "—") : (drive.company_name || "—")}
                       </strong>
                     </td>
                     <td>{drive.role || "—"}</td>
@@ -2506,10 +2508,10 @@ export function Applications() {
 
     return (
       (!q ||
-        String(application.student_name || application.student || "")
+        String(typeof application.student === "object" ? (application.student?.name || application.student_name) : (application.student_name || ""))
           .toLowerCase()
           .includes(q) ||
-        String(application.company_name || application.company || "")
+        String(typeof application.company === "object" ? application.company?.name : (application.company_name || application.drive?.company?.name || ""))
           .toLowerCase()
           .includes(q)) &&
       (status === "ALL" ||
@@ -2580,15 +2582,15 @@ export function Applications() {
                   <tr key={application.id || index}>
                     <td>
                       <strong>
-                        {application.student_name ||
-                          application.student ||
-                          "—"}
+                        {typeof application.student === "object"
+                          ? (application.student?.name || application.student_name || "—")
+                          : (application.student_name || "—")}
                       </strong>
                     </td>
                     <td>
-                      {application.company_name ||
-                        application.company ||
-                        "—"}
+                      {typeof application.company === "object"
+                        ? (application.company?.name || "—")
+                        : (application.company_name || application.drive?.company?.name || application.drive?.title || "—")}
                     </td>
                     <td>{application.drive_id || "—"}</td>
                     <td>
@@ -2881,7 +2883,7 @@ export function AuditLog() {
 
                   <span>
                     {item.description ||
-                      item.details ||
+                      (typeof item.details === "object" ? (Object.entries(item.details || {}).map(([k, v]) => `${k}: ${v}`).join(", ") || item.entity_type) : item.details) ||
                       item.entity_type ||
                       "Platform activity"}
                   </span>

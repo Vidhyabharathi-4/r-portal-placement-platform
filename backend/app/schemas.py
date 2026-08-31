@@ -32,12 +32,19 @@ class Token(BaseModel):
 
 
 class CompanyBase(BaseModel):
-    name: str = Field(min_length=2, max_length=160)
+    name: str = Field(default="Company", max_length=160)
     website: str | None = Field(default=None, max_length=255)
     industry: str | None = Field(default=None, max_length=120)
     contact_name: str | None = Field(default=None, max_length=120)
-    contact_email: str | None = Field(default=None, pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+    contact_email: str | None = Field(default=None)
     recruiter_status: RecruiterStatus = RecruiterStatus.COLD
+
+    @field_validator("contact_email", "website", "industry", "contact_name", mode="before")
+    @classmethod
+    def empty_string_to_none(cls, v):
+        if v is None or (isinstance(v, str) and not v.strip()):
+            return None
+        return v
 
 
 class CompanyOut(CompanyBase):
@@ -55,11 +62,11 @@ class CompanyDetailsOut(CompanyOut):
 
 
 class DriveBase(BaseModel):
-    title: str = Field(min_length=2, max_length=180)
+    title: str = Field(default="Placement Drive", max_length=180)
     company_id: int
-    location: str = Field(min_length=2, max_length=140)
+    location: str = Field(default="TBD", max_length=140)
     package_lpa: str | None = Field(default=None, max_length=60)
-    eligibility: str = Field(min_length=2, max_length=5000)
+    eligibility: str = Field(default="N/A", max_length=5000)
     deadline: datetime | None = None
     status: DriveStatus = DriveStatus.DRAFT
     description: str | None = None
@@ -67,6 +74,13 @@ class DriveBase(BaseModel):
     departments: str | None = None
     required_skills: str | None = None
     work_mode: str | None = None
+
+    @field_validator("location", "eligibility", "title", mode="before")
+    @classmethod
+    def empty_string_to_default(cls, v):
+        if v is None or (isinstance(v, str) and not v.strip()):
+            return "N/A"
+        return v
 
 
 class DriveCreate(DriveBase):
@@ -134,7 +148,7 @@ class DashboardOut(BaseModel):
 class StudentBase(BaseModel):
     registration_number: str = Field(min_length=2, max_length=80)
     name: str = Field(min_length=2, max_length=140)
-    email: str = Field(pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+    email: str
     phone: str | None = None
     department: str = Field(min_length=2, max_length=120)
     academic_details: str | None = None
@@ -145,6 +159,13 @@ class StudentBase(BaseModel):
     placed_company_id: int | None = None
     offer_package_lpa: str | None = None
     drive_links: list = Field(default_factory=list)
+
+    @field_validator("phone", "academic_details", "cgpa", "skills", "offer_package_lpa", mode="before")
+    @classmethod
+    def student_empty_to_none(cls, v):
+        if v is None or (isinstance(v, str) and not v.strip()):
+            return None
+        return v
 class StudentCreate(StudentBase): pass
 class StudentOut(StudentBase):
     model_config = ConfigDict(from_attributes=True)

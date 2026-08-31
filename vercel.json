@@ -15,24 +15,12 @@
   ],
   "rewrites": [
     {
-      "source": "/api/:path*",
+      "source": "/api/(.*)",
       "destination": "/api/index.py"
     },
     {
-      "source": "/assets/:path*",
-      "destination": "/frontend/assets/:path*"
-    },
-    {
-      "source": "/favicon.ico",
-      "destination": "/frontend/favicon.ico"
-    },
-    {
-      "source": "/",
-      "destination": "/frontend/index.html"
-    },
-    {
-      "source": "/:path*",
-      "destination": "/frontend/index.html"
+      "source": "/(.*)",
+      "destination": "/index.html"
     }
   ]
 }

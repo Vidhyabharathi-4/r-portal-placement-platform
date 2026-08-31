@@ -78,7 +78,17 @@ export default function Auth({ onAuthenticated }) {
 
       <section className="auth-intro">
         <div className="auth-brand">
-          <img src="/logo.png" alt="R-PORTAL Logo" className="auth-logo-img" />
+          <span className="brand-mark">
+            <img
+              src="/logo.png"
+              alt="R-PORTAL Logo"
+              className="auth-logo-img"
+              onError={(e) => {
+                e.currentTarget.style.display = "none";
+              }}
+            />
+            <BookOpenCheck size={28} className="auth-fallback-icon" />
+          </span>
           <b>R-PORTAL</b>
         </div>
 

@@ -105,7 +105,15 @@ export default function AppShell({ user, onSignOut }) {
       >
         <div className="sidebar-brand">
           <span className="brand-mark">
-            <img src="/logo.png" alt="R-PORTAL Logo" className="brand-logo-img" />
+            <img
+              src="/logo.png"
+              alt="R-PORTAL Logo"
+              className="brand-logo-img"
+              onError={(e) => {
+                e.currentTarget.style.display = "none";
+              }}
+            />
+            <BookOpenCheck size={22} className="brand-fallback-icon" />
           </span>
 
           <span>
