@@ -138,6 +138,11 @@ export async function api(path, options = {}) {
     });
 
     if (!response.ok) {
+      if (response.status === 401) {
+        localStorage.removeItem("rportal_token");
+        localStorage.removeItem("rportal_session");
+        window.location.href = "/login";
+      }
       let errorDetail = `Request failed: ${response.status}`;
       try {
         const errorJson = await response.json();
@@ -171,6 +176,11 @@ export async function api(path, options = {}) {
       });
 
       if (!response.ok) {
+        if (response.status === 401) {
+          localStorage.removeItem("rportal_token");
+          localStorage.removeItem("rportal_session");
+          window.location.href = "/login";
+        }
         let errorDetail = `Request failed: ${response.status}`;
         try {
           const errorJson = await response.json();
@@ -1390,6 +1400,20 @@ export function PlacementTeam() {
     }
   };
 
+  const handleDeleteMember = async (memberId) => {
+    if (!window.confirm("Are you sure you want to delete this team member?")) return;
+    setSaving(true);
+    try {
+      await api(`/api/placement-team/${memberId}`, { method: "DELETE" });
+      showNotification("Team member deleted successfully.", "success");
+      await loadAll();
+    } catch (err) {
+      showNotification(err.message || "Unable to delete team member.", "error");
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const handleAssignDrive = async () => {
     if (!selectedMember || !selectedDriveId) {
       showNotification("Select a placement drive to assign.", "error");
@@ -1682,6 +1706,15 @@ export function PlacementTeam() {
                               }}
                             >
                               Assign
+                            </button>
+                            <button
+                              type="button"
+                              title="Delete Member"
+                              className="danger-icon"
+                              onClick={() => handleDeleteMember(member.id)}
+                              disabled={saving}
+                            >
+                              <Trash2 size={16} />
                             </button>
                           </>
                         )}
@@ -3727,6 +3760,19 @@ export function Drives() {
     }
   };
 
+  const handleDeleteDrive = async (drive) => {
+    if (!window.confirm(`Are you sure you want to delete the placement drive "${drive.title}"?`)) return;
+    try {
+      await api(`/api/drives/${drive.id}`, { method: "DELETE" });
+      showToast(`Drive "${drive.title}" deleted successfully!`);
+      invalidateCache("/api/drives");
+      invalidateCache("/api/dashboard");
+      await loadDrives();
+    } catch (err) {
+      showToast(err.message || "Failed to delete placement drive.", "error");
+    }
+  };
+
   const exportColumns = [
     { key: "title", label: "DRIVE TITLE" },
     { key: "job_role", label: "JOB ROLE", accessor: (item) => item.job_role || item.title },
@@ -3942,34 +3988,44 @@ export function Drives() {
                         </button>
 
                         {canEdit && (
-                          <button
-                            type="button"
-                            title="Edit Drive"
-                            onClick={() => {
-                              setSelectedDrive(drive);
-                              setFormData({
-                                title: drive.title || "",
-                                company_id: String(drive.company_id),
-                                job_role: drive.job_role || drive.title || "",
-                                location: drive.location || "Campus",
-                                package_lpa: drive.package_lpa || "",
-                                min_cgpa: drive.min_cgpa || "6.0",
-                                max_backlogs: drive.max_backlogs || 0,
-                                required_skills: drive.required_skills || "",
-                                preferred_skills: drive.preferred_skills || "",
-                                departments: drive.departments || "CSE, IT, ECE, AIDS",
-                                experience_requirement: drive.experience_requirement || "Fresher / Final Year",
-                                certifications: drive.certifications || "",
-                                eligibility: drive.eligibility || "",
-                                description: drive.description || "",
-                                status: drive.status || "OPEN",
-                                work_mode: drive.work_mode || "On-site",
-                              });
-                              setModalMode("edit");
-                            }}
-                          >
-                            <Pencil size={15} />
-                          </button>
+                          <>
+                            <button
+                              type="button"
+                              title="Edit Drive"
+                              onClick={() => {
+                                setSelectedDrive(drive);
+                                setFormData({
+                                  title: drive.title || "",
+                                  company_id: String(drive.company_id),
+                                  job_role: drive.job_role || drive.title || "",
+                                  location: drive.location || "Campus",
+                                  package_lpa: drive.package_lpa || "",
+                                  min_cgpa: drive.min_cgpa || "6.0",
+                                  max_backlogs: drive.max_backlogs || 0,
+                                  required_skills: drive.required_skills || "",
+                                  preferred_skills: drive.preferred_skills || "",
+                                  departments: drive.departments || "CSE, IT, ECE, AIDS",
+                                  experience_requirement: drive.experience_requirement || "Fresher / Final Year",
+                                  certifications: drive.certifications || "",
+                                  eligibility: drive.eligibility || "",
+                                  description: drive.description || "",
+                                  status: drive.status || "OPEN",
+                                  work_mode: drive.work_mode || "On-site",
+                                });
+                                setModalMode("edit");
+                              }}
+                            >
+                              <Pencil size={15} />
+                            </button>
+                            <button
+                              type="button"
+                              title="Delete Drive"
+                              className="danger-icon"
+                              onClick={() => handleDeleteDrive(drive)}
+                            >
+                              <Trash2 size={15} />
+                            </button>
+                          </>
                         )}
                       </div>
                     </td>
@@ -4345,6 +4401,16 @@ export function Applications() {
     }
   };
 
+  const handleDeleteApplication = async (appId) => {
+    if (!window.confirm("Are you sure you want to delete this application record?")) return;
+    try {
+      await api(`/api/applications/${appId}`, { method: "DELETE" });
+      await loadApplications();
+    } catch (err) {
+      alert("Error: " + err.message);
+    }
+  };
+
   const filtered = useMemo(() => {
     const q = search.toLowerCase().trim();
 
@@ -4456,7 +4522,7 @@ export function Applications() {
                   <th>DRIVE</th>
                   <th>APPLIED DATE</th>
                   <SortHeader label="STATUS" sortKey="status" currentSort={sort} onSort={handleSort} />
-                  {canEdit && <th>UPDATE STATUS</th>}
+                  {canEdit && <th>ACTIONS / STATUS</th>}
                 </tr>
               </thead>
 
@@ -4477,17 +4543,28 @@ export function Applications() {
                     </td>
                     {canEdit && (
                       <td>
-                        <select
-                          className="table-status-select"
-                          value={application.status}
-                          onChange={(e) => handleStatusChange(application.id, e.target.value)}
-                        >
-                          <option value="APPLIED">Applied</option>
-                          <option value="SHORTLISTED">Shortlisted</option>
-                          <option value="INTERVIEW">Interview</option>
-                          <option value="OFFERED">Offered</option>
-                          <option value="REJECTED">Rejected</option>
-                        </select>
+                        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                          <select
+                            className="table-status-select"
+                            value={application.status}
+                            onChange={(e) => handleStatusChange(application.id, e.target.value)}
+                          >
+                            <option value="APPLIED">Applied</option>
+                            <option value="SHORTLISTED">Shortlisted</option>
+                            <option value="INTERVIEW">Interview</option>
+                            <option value="OFFERED">Offered</option>
+                            <option value="REJECTED">Rejected</option>
+                          </select>
+                          <button
+                            type="button"
+                            title="Delete Application"
+                            className="danger-icon"
+                            onClick={() => handleDeleteApplication(application.id)}
+                            style={{ padding: "4px" }}
+                          >
+                            <Trash2 size={15} />
+                          </button>
+                        </div>
                       </td>
                     )}
                   </tr>
