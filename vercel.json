@@ -20,31 +20,31 @@
     },
     {
       "source": "/assets/:path*",
-      "destination": "/frontend/assets/:path*"
+      "destination": "/assets/:path*"
     },
     {
       "source": "/favicon.ico",
-      "destination": "/frontend/favicon.ico"
+      "destination": "/favicon.ico"
     },
     {
       "source": "/favicon.svg",
-      "destination": "/frontend/favicon.svg"
+      "destination": "/favicon.svg"
     },
     {
       "source": "/icons.svg",
-      "destination": "/frontend/icons.svg"
+      "destination": "/icons.svg"
     },
     {
       "source": "/rathinam-logo.png",
-      "destination": "/frontend/rathinam-logo.png"
+      "destination": "/rathinam-logo.png"
     },
     {
       "source": "/",
-      "destination": "/frontend/index.html"
+      "destination": "/index.html"
     },
     {
       "source": "/:path*",
-      "destination": "/frontend/index.html"
+      "destination": "/index.html"
     }
   ]
 }
