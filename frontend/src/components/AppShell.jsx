@@ -105,12 +105,12 @@ export default function AppShell({ user, onSignOut }) {
       >
         <div className="sidebar-brand">
           <span className="brand-mark">
-            <BookOpenCheck size={22} />
+            <img src="/logo.png" alt="R-PORTAL Logo" className="brand-logo-img" />
           </span>
 
           <span>
             <b>R-PORTAL</b>
-            <small>Placement Operations</small>
+            <small>Enterprise Placement Operations</small>
           </span>
 
           <button

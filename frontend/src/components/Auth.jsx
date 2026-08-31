@@ -78,7 +78,7 @@ export default function Auth({ onAuthenticated }) {
 
       <section className="auth-intro">
         <div className="auth-brand">
-          <BookOpenCheck size={26} />
+          <img src="/logo.png" alt="R-PORTAL Logo" className="auth-logo-img" />
           <b>R-PORTAL</b>
         </div>
 
