@@ -1410,6 +1410,20 @@ export function PlacementTeam() {
     }
   };
 
+  const handleDeleteMember = async (memberId) => {
+    if (!window.confirm("Are you sure you want to delete this team member?")) return;
+    setSaving(true);
+    try {
+      await api(`/api/placement-team/${memberId}`, { method: "DELETE" });
+      showNotification("Team member deleted successfully.", "success");
+      await loadAll();
+    } catch (err) {
+      showNotification(err.message || "Unable to delete team member.", "error");
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const handleAssignDrive = async () => {
     if (!selectedMember || !selectedDriveId) {
       showNotification("Select a placement drive to assign.", "error");
@@ -1614,6 +1628,15 @@ export function PlacementTeam() {
                           </button>
                           <button type="button" title="Assign drive" className="secondary-button small-button" onClick={() => openAssignDriveModal(member)}>
                             Assign Drive
+                          </button>
+                          <button
+                            type="button"
+                            title="Delete member"
+                            className="danger-icon"
+                            onClick={() => handleDeleteMember(member.id)}
+                            disabled={saving}
+                          >
+                            <Trash2 size={16} />
                           </button>
                         </>}
                       </div>
@@ -1971,6 +1994,8 @@ export function Recruiters() {
   const [showAddModal, setShowAddModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [editingCompany, setEditingCompany] = useState(null);
+  const [showViewModal, setShowViewModal] = useState(false);
+  const [viewingCompany, setViewingCompany] = useState(null);
   const [saving, setSaving] = useState(false);
   const [formData, setFormData] = useState({
     name: "",
@@ -2179,7 +2204,14 @@ export function Recruiters() {
                     </td>
                     <td>
                       <div className="table-actions">
-                        <button>
+                        <button
+                          type="button"
+                          title="View details"
+                          onClick={() => {
+                            setViewingCompany(company);
+                            setShowViewModal(true);
+                          }}
+                        >
                           <Eye size={16} />
                         </button>
                         {admin && (
@@ -2322,6 +2354,52 @@ export function Recruiters() {
           </div>
         </div>
       )}
+
+      {showViewModal && viewingCompany && (
+        <div className="modal-overlay" onClick={() => setShowViewModal(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2>Recruiter Details</h2>
+              <button type="button" className="close-btn" onClick={() => setShowViewModal(false)}>✕</button>
+            </div>
+            <div className="modal-body">
+              <div className="form-group">
+                <label>Company Name</label>
+                <p>{viewingCompany.name}</p>
+              </div>
+              <div className="form-group">
+                <label>Contact Person</label>
+                <p>{viewingCompany.contact_name || "—"}</p>
+              </div>
+              <div className="form-group">
+                <label>Email</label>
+                <p>{viewingCompany.contact_email || "—"}</p>
+              </div>
+              <div className="form-group">
+                <label>Industry</label>
+                <p>{viewingCompany.industry || "—"}</p>
+              </div>
+              <div className="form-group">
+                <label>Website</label>
+                <p>
+                  {viewingCompany.website ? (
+                    <a href={viewingCompany.website.startsWith("http") ? viewingCompany.website : `https://${viewingCompany.website}`} target="_blank" rel="noopener noreferrer">
+                      {viewingCompany.website}
+                    </a>
+                  ) : "—"}
+                </p>
+              </div>
+              <div className="form-group">
+                <label>Temperature</label>
+                <p><StatusBadge status={viewingCompany.recruiter_status || "COLD"} /></p>
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button type="button" className="secondary-button" onClick={() => setShowViewModal(false)}>Close</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -2333,21 +2411,106 @@ export function Recruiters() {
 export function Drives() {
   const admin = isAdmin();
   const [drives, setDrives] = useState([]);
+  const [companies, setCompanies] = useState([]);
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("ALL");
   const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [showViewModal, setShowViewModal] = useState(false);
+  const [viewingDrive, setViewingDrive] = useState(null);
+  const [editingDrive, setEditingDrive] = useState(null);
+  const [formData, setFormData] = useState({
+    title: "Placement Drive",
+    company_id: "",
+    location: "TBD",
+    package_lpa: "",
+    eligibility: "N/A",
+    deadline: "",
+    status: "DRAFT",
+    description: "",
+    drive_date: "",
+    departments: "",
+    required_skills: "",
+    work_mode: "Hybrid",
+  });
 
   async function load() {
     try {
       setLoading(true);
-
-      const result = await api("/api/drives");
-      setDrives(Array.isArray(result) ? result : result?.items || []);
+      const [driveResult, compResult] = await Promise.all([
+        api("/api/drives"),
+        api("/api/recruiters"),
+      ]);
+      setDrives(Array.isArray(driveResult) ? driveResult : driveResult?.items || []);
+      setCompanies(Array.isArray(compResult) ? compResult : compResult?.items || []);
     } catch (err) {
       setError(err.message);
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function handleSaveDrive() {
+    if (!formData.title || !formData.company_id) {
+      alert("Drive Title and Company are required.");
+      return;
+    }
+    try {
+      setSaving(true);
+      const payload = {
+        ...formData,
+        company_id: Number(formData.company_id),
+        deadline: formData.deadline ? new Date(formData.deadline).toISOString() : null,
+        drive_date: formData.drive_date ? new Date(formData.drive_date).toISOString() : null,
+      };
+      
+      if (editingDrive) {
+        await api(`/api/drives/${editingDrive.id}`, {
+          method: "PUT",
+          body: JSON.stringify(payload),
+        });
+      } else {
+        await api("/api/drives", {
+          method: "POST",
+          body: JSON.stringify(payload),
+        });
+      }
+      
+      setFormData({
+        title: "Placement Drive",
+        company_id: "",
+        location: "TBD",
+        package_lpa: "",
+        eligibility: "N/A",
+        deadline: "",
+        status: "DRAFT",
+        description: "",
+        drive_date: "",
+        departments: "",
+        required_skills: "",
+        work_mode: "Hybrid",
+      });
+      setEditingDrive(null);
+      setShowAddModal(false);
+      setShowEditModal(false);
+      await load();
+    } catch (err) {
+      alert("Error: " + err.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleDeleteDrive(id) {
+    if (!confirm("Are you sure you want to delete this placement drive?")) return;
+    try {
+      await api(`/api/drives/${id}`, { method: "DELETE" });
+      await load();
+    } catch (err) {
+      alert("Error: " + err.message);
     }
   }
 
@@ -2381,10 +2544,33 @@ export function Drives() {
           <p>Manage upcoming and completed recruitment drives.</p>
         </div>
 
-        {admin && <button className="primary-button">
-          <Plus size={17} />
-          Create Drive
-        </button>}
+        {admin && (
+          <button
+            type="button"
+            className="primary-button"
+            onClick={() => {
+              setFormData({
+                title: "Placement Drive",
+                company_id: "",
+                location: "TBD",
+                package_lpa: "",
+                eligibility: "N/A",
+                deadline: "",
+                status: "DRAFT",
+                description: "",
+                drive_date: "",
+                departments: "",
+                required_skills: "",
+                work_mode: "Hybrid",
+              });
+              setEditingDrive(null);
+              setShowAddModal(true);
+            }}
+          >
+            <Plus size={17} />
+            Create Drive
+          </button>
+        )}
       </div>
 
       <section className="panel">
@@ -2449,14 +2635,47 @@ export function Drives() {
                     </td>
                     <td>
                       <div className="table-actions">
-                        <button>
+                        <button
+                          type="button"
+                          title="View details"
+                          onClick={() => {
+                            setViewingDrive(drive);
+                            setShowViewModal(true);
+                          }}
+                        >
                           <Eye size={16} />
                         </button>
                         {admin && <>
-                          <button>
+                          <button
+                            type="button"
+                            title="Edit drive"
+                            onClick={() => {
+                              setEditingDrive(drive);
+                              setFormData({
+                                title: drive.title || "",
+                                company_id: String(drive.company_id || ""),
+                                location: drive.location || "",
+                                package_lpa: drive.package_lpa || "",
+                                eligibility: drive.eligibility || "",
+                                deadline: drive.deadline ? drive.deadline.slice(0, 16) : "",
+                                status: drive.status || "DRAFT",
+                                description: drive.description || "",
+                                drive_date: drive.drive_date ? drive.drive_date.slice(0, 16) : "",
+                                departments: drive.departments || "",
+                                required_skills: drive.required_skills || "",
+                                work_mode: drive.work_mode || "Hybrid",
+                              });
+                              setShowEditModal(true);
+                            }}
+                          >
                             <Pencil size={16} />
                           </button>
-                          <button className="danger-icon">
+                          <button
+                            type="button"
+                            title="Delete drive"
+                            className="danger-icon"
+                            onClick={() => handleDeleteDrive(drive.id)}
+                          >
                             <Trash2 size={16} />
                           </button>
                         </>}
@@ -2469,6 +2688,277 @@ export function Drives() {
           </div>
         )}
       </section>
+
+      {showViewModal && viewingDrive && (
+        <div className="modal-overlay" onClick={() => setShowViewModal(false)}>
+          <div className="modal modal-wide" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2>Drive Details</h2>
+              <button type="button" className="close-btn" onClick={() => setShowViewModal(false)}>✕</button>
+            </div>
+            <div className="modal-body">
+              <div className="form-group">
+                <label>Drive Title & Role</label>
+                <p><strong>{viewingDrive.title}</strong> — {viewingDrive.role || "TBD"}</p>
+              </div>
+              <div className="form-group">
+                <label>Company</label>
+                <p>{typeof viewingDrive.company === "object" ? (viewingDrive.company?.name || viewingDrive.company_name) : (viewingDrive.company_name || "—")}</p>
+              </div>
+              <div className="form-row two-col">
+                <div className="form-group">
+                  <label>Location</label>
+                  <p>{viewingDrive.location || "—"}</p>
+                </div>
+                <div className="form-group">
+                  <label>Work Mode</label>
+                  <p>{viewingDrive.work_mode || "—"}</p>
+                </div>
+              </div>
+              <div className="form-row two-col">
+                <div className="form-group">
+                  <label>CTC / Package</label>
+                  <p>{viewingDrive.ctc || viewingDrive.package || viewingDrive.package_lpa || "—"}</p>
+                </div>
+                <div className="form-group">
+                  <label>Status</label>
+                  <p><StatusBadge status={viewingDrive.status} /></p>
+                </div>
+              </div>
+              <div className="form-row two-col">
+                <div className="form-group">
+                  <label>Drive Date</label>
+                  <p>{viewingDrive.drive_date || viewingDrive.date || "—"}</p>
+                </div>
+                <div className="form-group">
+                  <label>Application Deadline</label>
+                  <p>{viewingDrive.deadline || "—"}</p>
+                </div>
+              </div>
+              <div className="form-group">
+                <label>Target Departments</label>
+                <p>{viewingDrive.departments || "—"}</p>
+              </div>
+              <div className="form-group">
+                <label>Required Skills</label>
+                <p>{viewingDrive.required_skills || "—"}</p>
+              </div>
+              <div className="form-group">
+                <label>Eligibility & CGPA Criteria</label>
+                <p>CGPA: {viewingDrive.min_cgpa || "6.0"} | Max Backlogs: {viewingDrive.max_backlogs ?? 0}</p>
+                <p style={{ marginTop: "8px", whiteSpace: "pre-wrap" }}>{viewingDrive.eligibility || "—"}</p>
+              </div>
+              <div className="form-group">
+                <label>Job Description & Details</label>
+                <p style={{ whiteSpace: "pre-wrap" }}>{viewingDrive.description || "—"}</p>
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button type="button" className="secondary-button" onClick={() => setShowViewModal(false)}>Close</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {admin && (showAddModal || showEditModal) && (
+        <div className="modal-overlay">
+          <div className="modal modal-wide">
+            <div className="modal-header">
+              <h2>{editingDrive ? "Edit Placement Drive" : "Create Placement Drive"}</h2>
+              <button
+                type="button"
+                className="close-btn"
+                onClick={() => {
+                  setShowAddModal(false);
+                  setShowEditModal(false);
+                }}
+              >
+                ✕
+              </button>
+            </div>
+            <div className="modal-body">
+              <div className="form-row two-col">
+                <div className="form-group">
+                  <label>Drive Title *</label>
+                  <input
+                    type="text"
+                    value={formData.title}
+                    onChange={(e) => setFormData({ ...formData, title: e.target.value })}
+                    placeholder="e.g. Software Engineer 2026"
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Target Recruiter / Company *</label>
+                  <select
+                    value={formData.company_id}
+                    onChange={(e) => setFormData({ ...formData, company_id: e.target.value })}
+                  >
+                    <option value="">Select Company</option>
+                    {companies.map((c) => (
+                      <option key={c.id} value={c.id}>{c.name}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="form-row two-col">
+                <div className="form-group">
+                  <label>Job Role / Designation</label>
+                  <input
+                    type="text"
+                    value={formData.role || ""}
+                    onChange={(e) => setFormData({ ...formData, role: e.target.value })}
+                    placeholder="e.g. Backend Engineer"
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Work Mode</label>
+                  <select
+                    value={formData.work_mode || "Hybrid"}
+                    onChange={(e) => setFormData({ ...formData, work_mode: e.target.value })}
+                  >
+                    <option value="On-site">On-site</option>
+                    <option value="Remote">Remote</option>
+                    <option value="Hybrid">Hybrid</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="form-row two-col">
+                <div className="form-group">
+                  <label>Location</label>
+                  <input
+                    type="text"
+                    value={formData.location}
+                    onChange={(e) => setFormData({ ...formData, location: e.target.value })}
+                    placeholder="e.g. Bangalore"
+                  />
+                </div>
+                <div className="form-group">
+                  <label>CTC / Package (LPA)</label>
+                  <input
+                    type="text"
+                    value={formData.package_lpa || ""}
+                    onChange={(e) => setFormData({ ...formData, package_lpa: e.target.value })}
+                    placeholder="e.g. 12.5 LPA"
+                  />
+                </div>
+              </div>
+
+              <div className="form-row two-col">
+                <div className="form-group">
+                  <label>Drive Date</label>
+                  <input
+                    type="datetime-local"
+                    value={formData.drive_date || ""}
+                    onChange={(e) => setFormData({ ...formData, drive_date: e.target.value })}
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Application Deadline</label>
+                  <input
+                    type="datetime-local"
+                    value={formData.deadline || ""}
+                    onChange={(e) => setFormData({ ...formData, deadline: e.target.value })}
+                  />
+                </div>
+              </div>
+
+              <div className="form-row two-col">
+                <div className="form-group">
+                  <label>Target Departments (comma separated)</label>
+                  <input
+                    type="text"
+                    value={formData.departments || ""}
+                    onChange={(e) => setFormData({ ...formData, departments: e.target.value })}
+                    placeholder="e.g. CSE, IT, ECE"
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Required Skills (comma separated)</label>
+                  <input
+                    type="text"
+                    value={formData.required_skills || ""}
+                    onChange={(e) => setFormData({ ...formData, required_skills: e.target.value })}
+                    placeholder="e.g. Python, SQL, React"
+                  />
+                </div>
+              </div>
+
+              <div className="form-row three-col">
+                <div className="form-group">
+                  <label>Min CGPA Cut-off</label>
+                  <input
+                    type="text"
+                    value={formData.min_cgpa || "6.0"}
+                    onChange={(e) => setFormData({ ...formData, min_cgpa: e.target.value })}
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Max Backlogs Allowed</label>
+                  <input
+                    type="number"
+                    value={formData.max_backlogs ?? 0}
+                    onChange={(e) => setFormData({ ...formData, max_backlogs: Number(e.target.value) })}
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Drive Status</label>
+                  <select
+                    value={formData.status}
+                    onChange={(e) => setFormData({ ...formData, status: e.target.value })}
+                  >
+                    <option value="DRAFT">Draft</option>
+                    <option value="UPCOMING">Upcoming</option>
+                    <option value="ACTIVE">Active</option>
+                    <option value="COMPLETED">Completed</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="form-group">
+                <label>Eligibility details / description</label>
+                <textarea
+                  value={formData.eligibility}
+                  onChange={(e) => setFormData({ ...formData, eligibility: e.target.value })}
+                  rows={3}
+                  placeholder="Enter detailed eligibility criteria"
+                />
+              </div>
+
+              <div className="form-group">
+                <label>Job Description & Details</label>
+                <textarea
+                  value={formData.description || ""}
+                  onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+                  rows={3}
+                  placeholder="Enter job description"
+                />
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={() => {
+                  setShowAddModal(false);
+                  setShowEditModal(false);
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="primary-button"
+                onClick={handleSaveDrive}
+                disabled={saving}
+              >
+                {saving ? "Saving..." : "Save"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -2478,16 +2968,20 @@ export function Drives() {
 ========================================================= */
 
 export function Applications() {
+  const admin = isAdmin();
   const [applications, setApplications] = useState([]);
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("ALL");
   const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [showStatusModal, setShowStatusModal] = useState(false);
+  const [selectedApplication, setSelectedApplication] = useState(null);
+  const [newStatus, setNewStatus] = useState("APPLIED");
 
   async function load() {
     try {
       setLoading(true);
-
       const result = await api("/api/applications");
       setApplications(
         Array.isArray(result) ? result : result?.items || []
@@ -2496,6 +2990,33 @@ export function Applications() {
       setError(err.message);
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function handleUpdateStatus() {
+    if (!selectedApplication) return;
+    try {
+      setSaving(true);
+      await api(`/api/applications/${selectedApplication.id}/status`, {
+        method: "PATCH",
+        body: JSON.stringify({ status: newStatus }),
+      });
+      setShowStatusModal(false);
+      await load();
+    } catch (err) {
+      alert("Error: " + err.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleDeleteApplication(id) {
+    if (!confirm("Are you sure you want to delete this application record?")) return;
+    try {
+      await api(`/api/applications/${id}`, { method: "DELETE" });
+      await load();
+    } catch (err) {
+      alert("Error: " + err.message);
     }
   }
 
@@ -2574,6 +3095,7 @@ export function Applications() {
                   <th>DATE</th>
                   <th>STATUS</th>
                   <th>RESUME</th>
+                  <th>ACTIONS</th>
                 </tr>
               </thead>
 
@@ -2615,6 +3137,33 @@ export function Applications() {
                         "—"
                       )}
                     </td>
+                    <td>
+                      <div className="table-actions">
+                        {admin && (
+                          <>
+                            <button
+                              type="button"
+                              title="Update Status"
+                              onClick={() => {
+                                setSelectedApplication(application);
+                                setNewStatus(application.status);
+                                setShowStatusModal(true);
+                              }}
+                            >
+                              <Pencil size={16} />
+                            </button>
+                            <button
+                              type="button"
+                              title="Delete Application"
+                              className="danger-icon"
+                              onClick={() => handleDeleteApplication(application.id)}
+                            >
+                              <Trash2 size={16} />
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -2622,6 +3171,45 @@ export function Applications() {
           </div>
         )}
       </section>
+
+      {showStatusModal && selectedApplication && (
+        <div className="modal-overlay" onClick={() => setShowStatusModal(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2>Update Application Status</h2>
+              <button type="button" className="close-btn" onClick={() => setShowStatusModal(false)}>✕</button>
+            </div>
+            <div className="modal-body">
+              <div className="form-group">
+                <label>Student Name</label>
+                <p><strong>{typeof selectedApplication.student === "object" ? selectedApplication.student?.name : selectedApplication.student_name}</strong></p>
+              </div>
+              <div className="form-group">
+                <label>Company / Drive</label>
+                <p>{typeof selectedApplication.company === "object" ? selectedApplication.company?.name : (selectedApplication.company_name || selectedApplication.drive?.company?.name || "Placement Drive")}</p>
+              </div>
+              <div className="form-group">
+                <label>New Application Status</label>
+                <select
+                  value={newStatus}
+                  onChange={(e) => setNewStatus(e.target.value)}
+                >
+                  <option value="APPLIED">Applied</option>
+                  <option value="SHORTLISTED">Shortlisted</option>
+                  <option value="SELECTED">Selected</option>
+                  <option value="REJECTED">Rejected</option>
+                </select>
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button type="button" className="secondary-button" onClick={() => setShowStatusModal(false)}>Cancel</button>
+              <button type="button" className="primary-button" onClick={handleUpdateStatus} disabled={saving}>
+                {saving ? "Saving..." : "Save Changes"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

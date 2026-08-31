@@ -847,6 +847,28 @@ def reports(db: Session = Depends(get_db), current: User = Depends(get_current_u
 
 # Serve frontend static files
 from fastapi.staticfiles import StaticFiles
+@app.delete("/api/placement-team/{member_id}", status_code=204)
+def delete_team_member(member_id: int, db: Session = Depends(get_db), current: User = Depends(require_roles(Role.ADMIN))):
+    member = db.get(PlacementTeamMember, member_id)
+    if not member:
+        raise HTTPException(404, "Team member not found")
+    db.delete(member)
+    log_action(db, current, "DELETE", "placement_team_member", member_id, {})
+    audit_commit(db)
+    return None
+
+
+@app.delete("/api/applications/{application_id}", status_code=204)
+def delete_application(application_id: int, db: Session = Depends(get_db), current: User = Depends(require_roles(Role.ADMIN))):
+    application = db.get(Application, application_id)
+    if not application:
+        raise HTTPException(404, "Application not found")
+    db.delete(application)
+    log_action(db, current, "DELETE", "application", application_id, {})
+    audit_commit(db)
+    return None
+
+
 from fastapi.responses import FileResponse
 
 frontend_dir = os.path.join(
