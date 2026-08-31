@@ -47,6 +47,11 @@ async function api(path, options = {}) {
   });
 
   if (!response.ok) {
+    if (response.status === 401) {
+      localStorage.removeItem("rportal_token");
+      localStorage.removeItem("rportal_session");
+      window.location.href = "/login";
+    }
     const text = await response.text();
     throw new Error(text || `Request failed: ${response.status}`);
   }
