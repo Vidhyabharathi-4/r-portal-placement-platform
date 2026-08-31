@@ -1,4 +1,8 @@
 export const date = (value) => value ? new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' }).format(new Date(value)) : 'Not set'
 export const dateTime = (value) => value ? new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value)) : 'Not recorded'
-export const apiError = (error) => error.response?.data?.detail || 'Unable to load this data. Please try again.'
+export const apiError = (error) =>
+  error.response?.data?.detail ||
+  (error.code === 'ERR_NETWORK' || !error.response
+    ? 'Unable to connect to backend server. Please verify the API server is running on port 8000.'
+    : 'Unable to process this request. Please try again.')
 export const humanize = (value = '') => value.replaceAll('_', ' ').toLowerCase().replace(/\b\w/g, (letter) => letter.toUpperCase())

@@ -9,6 +9,7 @@ import {
   LogOut,
   Menu,
   ScrollText,
+  Settings as SettingsIcon,
   UsersRound,
   UserRoundCog,
   X,
@@ -22,12 +23,13 @@ const navigation = [
   ["/dashboard", LayoutDashboard, "Overview"],
   ["/students", UsersRound, "Students"],
   ["/placement-team", UserRoundCog, "Placement Team"],
-  ["/recruiters", Building2, "Recruiters"],
+  ["/companies", Building2, "Companies"],
   ["/drives", BriefcaseBusiness, "Placement Drives"],
   ["/applications", ClipboardList, "Applications"],
   ["/reports", FileBarChart2, "Reports"],
   ["/audit", ScrollText, "Audit Log"],
   ["/notifications", Bell, "Notifications"],
+  ["/settings", SettingsIcon, "Settings"],
 ];
 
 const titles = {
@@ -46,6 +48,10 @@ const titles = {
   "/recruiters": [
     "Recruiters",
     "Company relationships and recruitment momentum",
+  ],
+  "/companies": [
+    "Companies",
+    "Company management, recruiters, drives and placement tracking",
   ],
   "/drives": [
     "Placement Drives",
@@ -67,9 +73,13 @@ const titles = {
     "Notifications",
     "Operational updates requiring attention",
   ],
+  "/settings": [
+    "Settings",
+    "Manage profile, security, appearance, notifications, and application preferences",
+  ],
 };
 
-export default function AppShell({ user, onSignOut }) {
+export default function AppShell({ user, onSignOut, onUserUpdated }) {
   const [open, setOpen] = useState(false);
   const [unread, setUnread] = useState(0);
 
@@ -104,17 +114,20 @@ export default function AppShell({ user, onSignOut }) {
         }
       >
         <div className="sidebar-brand">
-          <span className="brand-mark">
-            <img
-              src="/logo.png"
-              alt="R-PORTAL Logo"
-              className="brand-logo-img"
-              onError={(e) => {
-                e.currentTarget.style.display = "none";
-              }}
-            />
-            <BookOpenCheck size={22} className="brand-fallback-icon" />
-          </span>
+          <img
+            src="/rathinam-logo.png"
+            alt="Rathinam College"
+            className="sidebar-college-logo"
+            style={{
+              height: '36px',
+              width: 'auto',
+              objectFit: 'contain',
+              background: '#ffffff',
+              padding: '2px 4px',
+              borderRadius: '6px',
+              boxShadow: '0 1px 3px rgba(0,0,0,0.1)'
+            }}
+          />
 
           <span>
             <b>R-PORTAL</b>
@@ -143,7 +156,7 @@ export default function AppShell({ user, onSignOut }) {
           ))}
         </nav>
 
-        <div className="sidebar-user">
+        <NavLink to="/settings" className="sidebar-user" title="Open Settings">
           <div className="avatar">
             {user?.full_name
               ?.slice(0, 1)
@@ -154,7 +167,7 @@ export default function AppShell({ user, onSignOut }) {
             <b>{user?.full_name || "User"}</b>
             <small>{user?.role || "User"}</small>
           </div>
-        </div>
+        </NavLink>
 
         <button
           className="signout"
@@ -197,21 +210,23 @@ export default function AppShell({ user, onSignOut }) {
               )}
             </NavLink>
 
-            <div className="avatar">
-              {user?.full_name
-                ?.slice(0, 1)
-                .toUpperCase()}
-            </div>
+            <NavLink to="/settings" className="topbar-user-link" title="Open Settings" style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
+              <div className="avatar">
+                {user?.full_name
+                  ?.slice(0, 1)
+                  .toUpperCase()}
+              </div>
 
-            <span>
-              {user?.full_name || "User"}
-            </span>
+              <span>
+                {user?.full_name || "User"}
+              </span>
+            </NavLink>
           </div>
         </header>
 
         {/* PAGE CONTENT */}
         <main className="content">
-          <Outlet context={{ user }} />
+          <Outlet context={{ user, onSignOut, onUserUpdated }} />
         </main>
       </div>
     </div>

@@ -8,6 +8,30 @@
       "destination": "/api/index.py"
     },
     {
+      "source": "/assets/:path*",
+      "destination": "/assets/:path*"
+    },
+    {
+      "source": "/favicon.ico",
+      "destination": "/favicon.ico"
+    },
+    {
+      "source": "/favicon.svg",
+      "destination": "/favicon.svg"
+    },
+    {
+      "source": "/icons.svg",
+      "destination": "/icons.svg"
+    },
+    {
+      "source": "/rathinam-logo.png",
+      "destination": "/rathinam-logo.png"
+    },
+    {
+      "source": "/logo.png",
+      "destination": "/logo.png"
+    },
+    {
       "source": "/(.*)",
       "destination": "/index.html"
     }

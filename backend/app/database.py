@@ -19,23 +19,48 @@ class Base(DeclarativeBase):
 
 
 def ensure_sqlite_schema() -> None:
-    if not settings.database_url.startswith("sqlite"):
-        return
+    is_postgres = not settings.database_url.startswith("sqlite")
 
     with engine.begin() as conn:
-        inspector = inspect(conn)
+        if is_postgres:
+            try:
+                conn.execute(text("ALTER TYPE recruiterstatus ADD VALUE IF NOT EXISTS 'DRIVE_COMPLETED'"))
+            except Exception:
+                pass
 
-        for table, columns in {
+        inspector = inspect(conn)
+        existing_tables = set(inspector.get_table_names())
+
+        table_defs = {
+            "users": [
+                ("preferences", "JSON NOT NULL DEFAULT '{}'"),
+            ],
             "companies": [
                 ("recruiter_status", "VARCHAR(20) NOT NULL DEFAULT 'COLD'"),
+                ("location", "VARCHAR(140)"),
+                ("address", "TEXT"),
+                ("description", "TEXT"),
+                ("contact_phone", "VARCHAR(30)"),
+                ("contact_designation", "VARCHAR(120) DEFAULT 'HR Manager'"),
+                ("logo_url", "VARCHAR(500)"),
+                ("notes", "TEXT"),
+                ("last_contacted_at", "TIMESTAMP WITH TIME ZONE" if is_postgres else "DATETIME"),
             ],
             "placement_drives": [
                 ("description", "TEXT"),
-                ("drive_date", "DATETIME"),
+                ("drive_date", "TIMESTAMP WITH TIME ZONE" if is_postgres else "DATETIME"),
                 ("departments", "TEXT"),
                 ("required_skills", "TEXT"),
+                ("preferred_skills", "TEXT"),
+                ("min_cgpa", "VARCHAR(20) DEFAULT '6.0'"),
+                ("max_backlogs", "INTEGER DEFAULT 0"),
+                ("job_role", "VARCHAR(140)"),
+                ("experience_requirement", "VARCHAR(100)"),
+                ("certifications", "TEXT"),
+                ("jd_document_path", "VARCHAR(500)"),
+                ("jd_text", "TEXT"),
                 ("work_mode", "VARCHAR(60)"),
-                ("is_archived", "BOOLEAN NOT NULL DEFAULT 0"),
+                ("is_archived", "BOOLEAN NOT NULL DEFAULT FALSE" if is_postgres else "BOOLEAN NOT NULL DEFAULT 0"),
             ],
             "applications": [
                 ("student_id", "INTEGER"),
@@ -44,18 +69,25 @@ def ensure_sqlite_schema() -> None:
                 ("role", "VARCHAR(120) NOT NULL DEFAULT 'Placement Officer'"),
                 ("responsibility", "VARCHAR(255) NOT NULL DEFAULT ''"),
                 ("assignment", "VARCHAR(255)"),
-                ("is_team_lead", "BOOLEAN NOT NULL DEFAULT 0"),
+                ("is_team_lead", "BOOLEAN NOT NULL DEFAULT FALSE" if is_postgres else "BOOLEAN NOT NULL DEFAULT 0"),
                 ("department", "VARCHAR(120)"),
                 ("phone", "VARCHAR(30)"),
-                ("joined_date", "DATETIME"),
+                ("joined_date", "TIMESTAMP WITH TIME ZONE" if is_postgres else "DATETIME"),
                 ("invited_by_id", "INTEGER"),
                 ("invitation_status", "VARCHAR(30) NOT NULL DEFAULT 'ACTIVE'"),
             ],
-        }.items():
+        }
+
+        for table, columns in table_defs.items():
+            if table not in existing_tables:
+                continue
             existing = {column["name"] for column in inspector.get_columns(table)}
             for column_name, column_def in columns:
                 if column_name not in existing:
-                    conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column_name} {column_def}"))
+                    try:
+                        conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column_name} {column_def}"))
+                    except Exception:
+                        pass
 
 
 def get_db():
